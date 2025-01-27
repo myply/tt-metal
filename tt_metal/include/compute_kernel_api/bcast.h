@@ -9,6 +9,7 @@
 #include "llk_math_binary_api.h"
 #include "llk_math_matmul_api.h"
 #include "llk_math_common.h"
+#include "llk_math_unary_datacopy_api.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_api.h"
@@ -20,6 +21,39 @@
 #endif
 
 namespace ckernel {
+
+template <BroadcastType bcast_type>
+ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
+    // Pass through uses A2D and potentially direct unpack to dest.
+    const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
+    const bool enable_unpack_to_dest = data_copy_type == A2D;
+
+    // Will configure A & B in similar way
+    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
+    UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
+        false, false /*transpose within 16x16 face*/, icb)));
+
+    MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, bcast_type, DST_ACCUM_MODE>(
+        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+
+    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_init<false>(ocb)));
+    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+}
+
+template <BroadcastType bcast_type>
+ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    // Pass through uses A2D and potentially direct unpack to dest.
+    const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
+    const bool enable_unpack_to_dest = data_copy_type == A2D;
+
+    UNPACK(
+        (llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(icb, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<data_copy_type, bcast_type, DST_ACCUM_MODE, enable_unpack_to_dest>(
+        dst_tile_index, icb)));
+}
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
