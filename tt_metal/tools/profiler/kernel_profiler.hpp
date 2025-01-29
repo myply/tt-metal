@@ -40,7 +40,6 @@ namespace kernel_profiler {
 
 extern uint32_t wIndex;
 extern uint32_t time_out;
-extern uint32_t doPush;
 extern uint32_t stackSize;
 
 extern uint32_t sums[SUM_COUNT];
@@ -87,6 +86,7 @@ uint32_t profiler_core_count_per_dram;
 uint32_t profiler_dram_profiler_address;
 uint32_t bank;
 uint32_t dram_offset_base;
+uint32_t pageSize;
 #endif
 
 enum class DoingDispatch { DISPATCH, NOT_DISPATCH };
@@ -94,6 +94,7 @@ enum class DoingDispatch { DISPATCH, NOT_DISPATCH };
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
     wIndex = CUSTOM_MARKERS;
+    profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = CUSTOM_MARKERS;
     stackSize = 0;
 
     for (int i = 0; i < SUM_COUNT; i++) {
@@ -104,7 +105,6 @@ __attribute__((noinline)) void init_profiler(
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
-
     if (runCounter == 0) {
         for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
@@ -133,6 +133,7 @@ __attribute__((noinline)) void init_profiler(
     profiler_dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
     profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
     bank = core_flat_id / profiler_core_count_per_dram;
+    pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
     dram_offset_base =
         (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
         (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
@@ -188,34 +189,68 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
 }
 
 inline __attribute__((always_inline)) void risc_finished_profiling() {
-    for (int i = 0; i < SUM_COUNT; i++) {
-        if (sums[i] > 0) {
-            if (wIndex < PROFILER_L1_VECTOR_SIZE) {
-                profiler_data_buffer[myRiscID][wIndex] = 0x80000000 | ((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12);
-                profiler_data_buffer[myRiscID][wIndex + 1] = sums[i];
-                wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-            }
-        }
-    }
-
     for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
     }
     profiler_control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
 }
 
-__attribute__((noinline)) void finish_profiler() {
-    risc_finished_profiling();
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
-    if (profiler_control_buffer[PROFILER_DONE] == 1) {
-        return;
+template <bool RECORD_ZONE = false>
+__attribute__((noinline)) void quick_push() {
+#if defined(COMPILE_FOR_BRISC)
+
+    if constexpr (RECORD_ZONE) {
+        SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
+        mark_time_at_index_inlined(wIndex, hash);
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+
+        mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
     }
-    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
+
+    InterleavedAddrGen<true> s = {.bank_base_address = profiler_dram_profiler_address, .page_size = pageSize};
+
+    uint32_t dram_offset =
+        dram_offset_base + profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
+
+    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(bank, dram_offset);
+
+    for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
+        mark_padding();
+    }
+    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID];
+
+    if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+        noc_async_write(
+            reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]),
+            dram_bank_dst_noc_addr,
+            wIndex * sizeof(uint32_t));
+
+        // noc_async_write_barrier();
+        profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] += wIndex;
+
+    } else {
+        mark_dropped_timestamps(HOST_BUFFER_END_INDEX_BR_ER + myRiscID);
+    }
+
+    wIndex = CUSTOM_MARKERS;
+#endif
+}
+
+__attribute__((noinline)) void finish_profiler() {
+    SrcLocNameToHash("PROFILER-DRAM-PUSH");
+    mark_time_at_index_inlined(wIndex, hash);
+    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+
+    mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
+    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    profiler_control_buffer[PROFILER_DONE] = 1;
+    risc_finished_profiling();
+#if defined(COMPILE_FOR_BRISC)
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
     uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
-
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
         profiler_data_buffer[riscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
@@ -263,115 +298,51 @@ __attribute__((noinline)) void finish_profiler() {
         }
     }
 
-    // noc_async_write_barrier();
-    profiler_control_buffer[RUN_COUNTER]++;
-    profiler_control_buffer[PROFILER_DONE] = 1;
-#endif
-}
-
-template <bool RECORD_ZONE = false>
-__attribute__((noinline)) void quick_push() {
-#if defined(COMPILE_FOR_BRISC)
-
-    if constexpr (RECORD_ZONE) {
-        SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
-        mark_time_at_index_inlined(wIndex, hash);
-        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-
-        mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
-        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-    }
-
-    InterleavedAddrGen<true> s = {
-        .bank_base_address = profiler_dram_profiler_address,
-        .page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram};
-
-    uint32_t dram_offset =
-        dram_offset_base + profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
-
-    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(bank, dram_offset);
-
-    for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
-        mark_padding();
-    }
-    // uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID];
-
-    // if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-    noc_async_write(
-        reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]), dram_bank_dst_noc_addr, wIndex * sizeof(uint32_t));
-
-    // noc_async_write_barrier();
-    profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] += wIndex;
-
-    //} else {
-    // mark_dropped_timestamps(HOST_BUFFER_END_INDEX_BR_ER + myRiscID);
-    //}
-
+    noc_async_write_barrier();
+    profiler_control_buffer[PROFILER_DONE] = 0;
     wIndex = CUSTOM_MARKERS;
-    // doPush = false;
-
 #endif
 }
-
-template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
-struct profileScope {
-    bool start_marked = false;
-    inline __attribute__((always_inline)) profileScope() {
-        if (bufferHasRoom<dispatch>()) {
-            stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
-            start_marked = true;
-            mark_time_at_index_inlined(wIndex, timer_id);
-            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-        }
-    }
-
-    inline __attribute__((always_inline)) ~profileScope() {
-        if (start_marked) {
-            mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_END));
-            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-            start_marked = false;
-            stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
-        }
-
-        if constexpr (dispatch == DoingDispatch::DISPATCH) {
-            if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
-                quick_push();
-            }
-        }
-    }
-};
 
 void push_time_out() {
 #if defined(COMPILE_FOR_BRISC)
     if (time_out++ > 100000 and wIndex > CUSTOM_MARKERS + PROFILER_L1_MARKER_UINT32_SIZE) {
-        // wIndex -= PROFILER_L1_MARKER_UINT32_SIZE;
-        // stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
-        // if (((profiler_data_buffer[0][wIndex] >> 28) & 0x7) == ZONE_END) {
-        // wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-        // stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
-        //}
         time_out = 0;
-        quick_push<true>();
+        finish_profiler();
     }
 #endif
 }
 
 struct scopePush {
-#if defined(COMPILE_FOR_BRISC)
+    // #if defined(COMPILE_FOR_BRISC)
     inline __attribute__((always_inline)) scopePush() {
+#if defined(COMPILE_FOR_BRISC)
         uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
         profiler_data_buffer[myRiscID][wIndex] = (runCounter & 0xFFFF) |
                                                  ((((core_flat_id & 0xFF) << 3) | myRiscID) << 16) |
                                                  ((runCounter & 0xF) << 27) | (0x1 << 31);
+#endif
+#if defined(COMPILE_FOR_NCRISC)
+        if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
+            while (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] != 0) {
+            }
+            wIndex = CUSTOM_MARKERS;
+        }
+#endif
     }
 
     inline __attribute__((always_inline)) ~scopePush() {
-        if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
-            quick_push<true>();
+#if defined(COMPILE_FOR_BRISC)
+        if (profiler_control_buffer[PROFILER_DONE] ||
+            wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
+            finish_profiler();
         }
-    }
 #else
+        if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
+            finish_profiler();
+        }
 #endif
+    }
 };
 
 template <uint32_t timer_id, uint32_t index>
@@ -381,13 +352,11 @@ struct profileScopeGuaranteed {
 
     static_assert(start_index < CUSTOM_MARKERS);
     static_assert(end_index < CUSTOM_MARKERS);
-#if defined(COMPILE_FOR_BRISC)
     bool start_marked = false;
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
         if (wIndex <
             (PROFILER_L1_VECTOR_SIZE - stackSize - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
             stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
-            // doPush = true;
             start_marked = true;
             mark_time_at_index_inlined(wIndex, timer_id);
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
@@ -400,35 +369,10 @@ struct profileScopeGuaranteed {
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = false;
             stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
-        }
-    }
-#else
-    // inline __attribute__((always_inline)) profileScopeGuaranteed() {
-    // if constexpr (index == 0) {
-    // init_profiler();
-    //}
-    // mark_time_at_index_inlined(start_index, timer_id);
-    //}
-    // inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
-    // mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
-    // if constexpr (index == 0) {
-    // finish_profiler();
-    //}
-    //}
+#if defined(COMPILE_FOR_NCRISC)
+            profiler_control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
 #endif
-};
-
-template <uint32_t timer_id, uint32_t index>
-struct profileScopeAccumulate {
-    uint64_t start_time = 0;
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-
-    inline __attribute__((always_inline)) profileScopeAccumulate() {
-        start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
-    }
-    inline __attribute__((always_inline)) ~profileScopeAccumulate() {
-        sumIDs[index] = timer_id;
-        sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        }
     }
 };
 

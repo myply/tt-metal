@@ -37,7 +37,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
     if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
         CoreType = HalProgrammableCoreType::TENSIX;
-        riscCount = 1;
+        riscCount = 5;
     } else {
         auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
         bool is_active_eth_core = active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
