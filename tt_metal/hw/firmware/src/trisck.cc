@@ -59,7 +59,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    DeviceZoneScopedMainChildN("TRISC-KERNEL");
+    // DeviceZoneScopedMainChildN("TRISC-KERNEL");
+    DeviceZoneScopedMainN("TRISC-KERNEL");
     run_kernel();
 #endif
 }

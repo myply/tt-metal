@@ -321,8 +321,7 @@ struct scopePush {
         profiler_data_buffer[myRiscID][wIndex] = (runCounter & 0xFFFF) |
                                                  ((((core_flat_id & 0xFF) << 3) | myRiscID) << 16) |
                                                  ((runCounter & 0xF) << 27) | (0x1 << 31);
-#endif
-#if defined(COMPILE_FOR_NCRISC)
+#else
         if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
             while (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] != 0) {
             }
@@ -369,7 +368,7 @@ struct profileScopeGuaranteed {
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = false;
             stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
-#if defined(COMPILE_FOR_NCRISC)
+#if !defined(COMPILE_FOR_BRRISC)
             profiler_control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
 #endif
         }
