@@ -92,6 +92,6 @@ jobs:
           for i in {1..10}; do
             echo "Iteration $i"
             tt-smi-metal -r0
-            ${{ inputs.command }}
+            ${{ inputs.command }} 2>&1 >/dev/null
             /opt/tt_metal_infra/scripts/ci/${{ inputs.arch }}/cleanup.sh
           done
