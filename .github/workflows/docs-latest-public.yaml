@@ -73,8 +73,8 @@ jobs:
         uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          target_branch: gh-pages
-          target_folder: $DOCS_VERSION
-          publish_dir: ./gh_pages/$DOCS_VERSION
-          force_orphan: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: gh-pages
+          target-folder: $DOCS_VERSION
+          folder: ./gh_pages/$DOCS_VERSION
+          force: false
