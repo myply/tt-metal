@@ -493,7 +493,7 @@ inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::packer::NUM_PACKERS << "." << ENDL();)
 }
 
 // PACK COUNTERS
@@ -553,7 +553,7 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::packer::NUM_PACKERS << "." << ENDL();)
 }
 
 // Choose what register you want printed with reg_id (1-4)
@@ -581,7 +581,7 @@ inline void dprint_tensix_pack_config(uint reg_id = 0) {
                 DPRINT << ENDL();
             }
         } else DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND "
-                      << num_of_instances << "." << ENDL();)
+                      << ckernel::packer::NUM_PACKERS << "." << ENDL();)
 }
 
 // Choose what register you want printed (1-2). 0 for all.
