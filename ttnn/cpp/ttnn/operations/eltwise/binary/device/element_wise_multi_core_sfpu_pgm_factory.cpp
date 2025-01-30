@@ -28,17 +28,21 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
+    auto a_dtype = a.get_dtype();
+    auto b_dtype = b.has_value() ? b->get_dtype() : a_dtype;
     auto& output = tensor_return_value;
     const auto& op_type = operation_attributes.binary_op_type;
+
+    bool is_bf16 = (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16);
 
     std::vector<UnaryWithParam> fused_activations =
         operation_attributes.activations.value_or(std::vector<UnaryWithParam>{});
 
     Program program{};
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a_dtype);
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
+    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b_dtype);
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
@@ -101,7 +105,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
     std::map<string, string> eltwise_defines = utils::get_defines_fp32(
-        op_type, a.get_dtype(), b->get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
+        op_type, a_dtype, b_dtype, fused_activations, operation_attributes.input_tensor_a_activation);
 
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
@@ -172,11 +176,12 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
                             (dst_cb_data_format == tt::DataFormat::UInt32);
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-
+    if (!is_bf16) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
 
     auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
