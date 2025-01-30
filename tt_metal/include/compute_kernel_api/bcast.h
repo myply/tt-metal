@@ -24,8 +24,10 @@ namespace ckernel {
 
 template <BroadcastType bcast_type>
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
+    // Pass through uses A2D and potentially direct unpack to dest.
     const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
-    const bool enable_unpack_to_dest = bcast_type == BroadcastType::NONE;
+    const bool enable_unpack_to_dest = data_copy_type == A2D;
+
     // Will configure A & B in similar way
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
     UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
@@ -43,14 +45,14 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
 
 template <BroadcastType bcast_type>
 ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, in_tile_index)));
-    if (bcast_type == BroadcastType::NONE) {
-        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(
-            dst_tile_index, icb)));
-    } else {
-        MATH((llk_math_eltwise_unary_datacopy<B2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(
-            dst_tile_index, icb)));
-    }
+    // Pass through uses A2D and potentially direct unpack to dest.
+    const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
+    const bool enable_unpack_to_dest = data_copy_type == A2D;
+
+    UNPACK(
+        (llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(icb, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<data_copy_type, bcast_type, DST_ACCUM_MODE, enable_unpack_to_dest>(
+        dst_tile_index, icb)));
 }
 
 /**
