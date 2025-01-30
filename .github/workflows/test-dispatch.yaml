@@ -35,6 +35,10 @@ on:
         type: string
         default: "Custom test dispatch"
         required: false
+      timeout:
+        required: false
+        type: number
+        default: 1440
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -58,7 +62,8 @@ jobs:
   test-dispatch:
     # needs: setup
     needs: build-artifact
-    timeout-minutes: 1440
+    # https://github.com/orgs/community/discussions/67182
+    timeout-minutes: ${{ fromJSON(inputs.timeout) }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
@@ -84,4 +89,7 @@ jobs:
           pip install pytest-repeat
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ${{ inputs.command }}
+          for i in {1..10}; do
+            echo "Iteration $i"
+            ${{ inputs.command }}
+          done
