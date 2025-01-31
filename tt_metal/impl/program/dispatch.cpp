@@ -895,6 +895,7 @@ void assemble_device_commands(
             i++;
         }
     }
+    fmt::println(stderr, "After unicast semaphores {}", calculator.write_offset_bytes());
 
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
@@ -1022,6 +1023,7 @@ void assemble_device_commands(
             batched_dispatch_subcmds[i].back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
         }
     }
+    fmt::println(stderr, "After batched transfers {}", calculator.write_offset_bytes());
 
     // Program Binaries and Go Signals
     // Get launch msg data while getting size of cmds
@@ -1152,11 +1154,13 @@ void assemble_device_commands(
             subcmd_list.back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
         }
     }
+    fmt::println(stderr, "After linear program binaries {}", calculator.write_offset_bytes());
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         calculator.add_dispatch_write_packed_large(kernel_bins_dispatch_subcmds[i].size());
         calculator.add_prefetch_relay_paged_packed(kernel_bins_prefetch_subcmds[i].size());
     }
+    fmt::println(stderr, "After multicast program binaries {}", calculator.write_offset_bytes());
     std::vector<std::pair<const void*, uint32_t>> multicast_go_signal_data;
     std::vector<std::pair<const void*, uint32_t>> unicast_go_signal_data;
     std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_go_signal_sub_cmds;
@@ -1199,6 +1203,7 @@ void assemble_device_commands(
             packed_write_max_unicast_sub_cmds,
             multicast_go_signals_payload);
     }
+    fmt::println(stderr, "After multicast launch messages {}", calculator.write_offset_bytes());
 
     programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     // TODO: ugly, can be fixed by looping over indices w/ some work
@@ -1236,6 +1241,7 @@ void assemble_device_commands(
             packed_write_max_unicast_sub_cmds,
             unicast_go_signals_payload);
     }
+    fmt::println(stderr, "After unicast launch messages {}", calculator.write_offset_bytes());
 
     // if dispatch_s is enabled have dispatch_d send a semaphore update to dispatch_s (this will include a write barrier
     // on dispatch_d if program is active) if not,  check if the program is active on workers. If active, have
@@ -1249,17 +1255,44 @@ void assemble_device_commands(
         unicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_unicast_txns(sub_device_id) : 0;
     if (tt_metal::DispatchQueryManager::instance().dispatch_s_enabled()) {
         calculator.add_notify_dispatch_s_go_signal_cmd();
+        fmt::println(stderr, "After notify s go signal {}", calculator.write_offset_bytes());
     } else {
         // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
         if (program_transfer_info.num_active_cores > 0) {
             calculator.add_dispatch_wait();
+            fmt::println(stderr, "After dispatch wait {}", calculator.write_offset_bytes());
         }
     }
     calculator.add_dispatch_go_signal_mcast();
+    fmt::println(stderr, "After go signal mcast {}", calculator.write_offset_bytes());
 
     program_command_sequence.device_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
 
     auto& device_command_sequence = program_command_sequence.device_command_sequence;
+
+    // Unicast Semaphore Cmd
+    index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+    for (uint32_t i = 0; i < num_unicast_semaphores; ++i) {
+        uint32_t curr_sub_cmd_idx = 0;
+        for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : unicast_sem_payload[i]) {
+            device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                num_sub_cmds_in_cmd,
+                unicast_sem_dst_size[i].first + program.get_program_config(index).sem_offset,
+                unicast_sem_dst_size[i].second,
+                unicast_sem_payload_sizeB,
+                unicast_sem_sub_cmds[i],
+                unicast_sem_data[i],
+                packed_write_max_unicast_sub_cmds,
+                curr_sub_cmd_idx,
+                false,
+                DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+            curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+            for (auto& data_and_size : unicast_sem_data[i]) {
+                RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
+            }
+        }
+    }
+    fmt::println(stderr, "Real After unicast semaphores {}", device_command_sequence.write_offset_bytes());
 
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -1304,29 +1337,7 @@ void assemble_device_commands(
             last_end = transfer.end();
         }
     }
-
-    // Unicast Semaphore Cmd
-    index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-    for (uint32_t i = 0; i < num_unicast_semaphores; ++i) {
-        uint32_t curr_sub_cmd_idx = 0;
-        for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : unicast_sem_payload[i]) {
-            device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                num_sub_cmds_in_cmd,
-                unicast_sem_dst_size[i].first + program.get_program_config(index).sem_offset,
-                unicast_sem_dst_size[i].second,
-                unicast_sem_payload_sizeB,
-                unicast_sem_sub_cmds[i],
-                unicast_sem_data[i],
-                packed_write_max_unicast_sub_cmds,
-                curr_sub_cmd_idx,
-                false,
-                DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
-            curr_sub_cmd_idx += num_sub_cmds_in_cmd;
-            for (auto& data_and_size : unicast_sem_data[i]) {
-                RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
-            }
-        }
-    }
+    fmt::println(stderr, "Real After multicast semaphore + CB {}", device_command_sequence.write_offset_bytes());
 
     // All Previous Cmds Up to This Point Go Into the Kernel Config Buffer
     program_command_sequence.program_config_buffer_data_size_bytes = device_command_sequence.write_offset_bytes();
@@ -1336,6 +1347,8 @@ void assemble_device_commands(
         device_command_sequence.add_data(
             kernel_bins_unicast_cmd.data(), kernel_bins_unicast_cmd.size_bytes(), kernel_bins_unicast_cmd.size_bytes());
     }
+    fmt::println(stderr, "Real After unicast program binaries {}", device_command_sequence.write_offset_bytes());
+
     uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         device_command_sequence.add_dispatch_write_packed_large(
@@ -1349,6 +1362,7 @@ void assemble_device_commands(
             kernel_bins_prefetch_subcmds[i],
             kernel_bins_prefetch_subcmds[i].size());
     }
+    fmt::println(stderr, "Real After mutlicast program binaries {}", device_command_sequence.write_offset_bytes());
 
     // Go Signals
     program_command_sequence.go_signals.reserve(
@@ -1386,6 +1400,7 @@ void assemble_device_commands(
             }
         }
     }
+    fmt::println(stderr, "Real After multicast launch {}", device_command_sequence.write_offset_bytes());
 
     if (unicast_go_signal_sub_cmds.size() > 0) {
         // Launch Message address is resolved when the program is enqueued
@@ -1418,6 +1433,7 @@ void assemble_device_commands(
             }
         }
     }
+    fmt::println(stderr, "Real After unicast launch {}", device_command_sequence.write_offset_bytes());
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     auto sub_device_index = sub_device_id.to_index();
@@ -1432,10 +1448,12 @@ void assemble_device_commands(
         device_command_sequence.add_notify_dispatch_s_go_signal_cmd(
             program_transfer_info.num_active_cores > 0, index_bitmask);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+        fmt::println(stderr, "Real After notify dispatch s go {}", device_command_sequence.write_offset_bytes());
     } else {
         // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
         if (program_transfer_info.num_active_cores > 0) {
             device_command_sequence.add_dispatch_wait(true, dispatch_message_addr, 0, 0, false, false);
+            fmt::println(stderr, "Real After dispatch wait {}", device_command_sequence.write_offset_bytes());
         }
     }
     go_msg_t run_program_go_signal;
@@ -1459,6 +1477,16 @@ void assemble_device_commands(
         &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
                            (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))
              ->mcast;
+
+    fmt::println(stderr, "Real After dispatch_go_signal_mcast {}", device_command_sequence.write_offset_bytes());
+    if (device_command_sequence.size_bytes() != device_command_sequence.write_offset_bytes()) {
+        fmt::println(
+            stderr,
+            "Mismatch in device command sequence size and write offset {} {}",
+            device_command_sequence.size_bytes(),
+            device_command_sequence.write_offset_bytes());
+        *(volatile int*)5 = 0;
+    }
 
     TT_ASSERT(device_command_sequence.size_bytes() == device_command_sequence.write_offset_bytes());
 }
