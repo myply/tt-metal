@@ -285,6 +285,7 @@ class transformer_2d_model:
             self.proj_in_conv_weights = ttnn.to_device(self.proj_in_conv_weights, self.device)
             self.proj_in_conv_bias = ttnn.to_device(self.proj_in_conv_bias, self.device)
 
+        print("transformer_2d_model first conv")
         hidden_states = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.proj_in_conv_weights,
@@ -295,13 +296,17 @@ class transformer_2d_model:
             return_output_dim=False,
             return_weights_and_bias=False,
         )
+        print("transformer_2d_model first conv done")
 
         inner_dim = hidden_states.shape[-1]
         # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
         # hidden_states = ttnn.reshape(hidden_states, (1, batch, height * width, inner_dim))
 
         # 2. Blocks
+        index = 0
         for block in self.blocks:
+            print(f"transformer_2d_model blocks {index}")
+            index = index + 1
             hidden_states = block(
                 hidden_states=hidden_states,
                 encoder_hidden_states=encoder_hidden_states,

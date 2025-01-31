@@ -80,85 +80,103 @@ class geglu:
 
     def __call__(self, config, hidden_states):
         # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
-        interleaved_output = False
-        size = hidden_states.shape[-2]
-        grid_size = self.grid_sizes[size]
+        # interleaved_output = False
+        # size = hidden_states.shape[-2]
+        # grid_size = self.grid_sizes[size]
+        # print("Geglu grid_size", grid_size)
         M, K, N = hidden_states.shape[-2], hidden_states.shape[-1], self.parameters.proj.proj_weight.shape[-1]
-        if not hidden_states.is_sharded():
-            hidden_states = ttnn.interleaved_to_sharded(
-                hidden_states,
-                grid_size,
-                [M // grid_size[1], K // grid_size[0]],
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-        in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
-            M, K, N, grid_size
-        )
+        print("Geglu M, K, N", M, K, N)
+
+        # if not hidden_states.is_sharded():
+        #     print("Geglu hidden_states not sharded, run i2s")
+        #     hidden_states = ttnn.interleaved_to_sharded(
+        #         hidden_states,
+        #         grid_size,
+        #         [M // grid_size[1], K // grid_size[0]],
+        #         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        #         ttnn.ShardOrientation.ROW_MAJOR,
+        #     )
+        if hidden_states.is_sharded():
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
+        # in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
+        #     M, K, N, grid_size
+        # )
+        # print("geglu in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w", in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w)
         # TODO: https://github.com/tenstorrent/tt-metal/issues/7560
-        if size == 512:
-            out_subblock_h = 1
-            out_subblock_w = 1
-        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            in0_block_w=in0_block_w,
-            out_subblock_h=out_subblock_h,
-            out_subblock_w=out_subblock_w,
-            per_core_M=out_block_h,
-            per_core_N=out_block_w,
-            transpose_mcast=False,
-            fused_activation=None,
-        )
+        # if size == 512:
+        #     out_subblock_h = 1
+        #     out_subblock_w = 1
+        # program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        #     compute_with_storage_grid_size=grid_size,
+        #     in0_block_w=in0_block_w,
+        #     out_subblock_h=out_subblock_h,
+        #     out_subblock_w=out_subblock_w,
+        #     per_core_M=out_block_h,
+        #     per_core_N=out_block_w,
+        #     transpose_mcast=False,
+        #     fused_activation=None,
+        # )
+        print("geglu linear 1")
+        print(f"geglu proj_weight.shape {self.parameters.proj.proj_weight.shape}")
+
+        print("Geglu hidden_states.shape", hidden_states.shape)
+        print("Geglu hidden_states.layout", hidden_states.layout)
+        print("Geglu hidden_states.memcfg", hidden_states.memory_config())
         proj = ttnn.linear(
             hidden_states,
             self.parameters.proj.proj_weight,
             bias=self.parameters.proj.proj_bias,
-            program_config=program_config,
-            memory_config=self.l1_interleaved_memory_config if interleaved_output else self.block_sharded_memory_config,
-            dtype=ttnn.bfloat8_b,
-            compute_kernel_config=self.compute_kernel_config,
+            # program_config=program_config,
+            # memory_config=self.l1_interleaved_memory_config if interleaved_output else self.block_sharded_memory_config,
+            # dtype=ttnn.bfloat8_b,
+            # compute_kernel_config=self.compute_kernel_config,
         )
-        if interleaved_output:
-            proj = ttnn.interleaved_to_sharded(
-                proj,
-                grid_size,
-                [proj.shape[-2] // grid_size[1], proj.shape[-1] // grid_size[0]],
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-        if hidden_states.shape[-2] == 8192:
-            proj = ttnn.reallocate(proj)
+        # if interleaved_output:
+        #     print("geglu interleaved_to_sharded")
+        #     proj = ttnn.interleaved_to_sharded(
+        #         proj,
+        #         grid_size,
+        #         [proj.shape[-2] // grid_size[1], proj.shape[-1] // grid_size[0]],
+        #         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        #         ttnn.ShardOrientation.ROW_MAJOR,
+        #     )
+        # if hidden_states.shape[-2] == 8192:
+        #     print("geglu reallocate")
+        #     proj = ttnn.reallocate(proj)
 
-        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            in0_block_w=in0_block_w,
-            out_subblock_h=out_subblock_h,
-            out_subblock_w=out_subblock_w,
-            per_core_M=out_block_h,
-            per_core_N=out_block_w,
-            transpose_mcast=False,
-            fused_activation=[ttnn.UnaryOpType.GELU, True],
-        )
+        # program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        #     compute_with_storage_grid_size=grid_size,
+        #     in0_block_w=in0_block_w,
+        #     out_subblock_h=out_subblock_h,
+        #     out_subblock_w=out_subblock_w,
+        #     per_core_M=out_block_h,
+        #     per_core_N=out_block_w,
+        #     transpose_mcast=False,
+        #     fused_activation=[ttnn.UnaryOpType.GELU, True],
+        # )
+        print("geglu linear 2")
         gate = ttnn.linear(
             hidden_states,
             self.parameters.proj.gate_weight,
             bias=self.parameters.proj.gate_bias,
-            program_config=program_config,
-            memory_config=self.l1_interleaved_memory_config if interleaved_output else self.block_sharded_memory_config,
-            dtype=ttnn.bfloat8_b,
-            compute_kernel_config=self.compute_kernel_config,
+            # program_config=program_config,
+            # memory_config=self.l1_interleaved_memory_config if interleaved_output else self.block_sharded_memory_config,
+            # dtype=ttnn.bfloat8_b,
+            # compute_kernel_config=self.compute_kernel_config,
         )
-        if interleaved_output:
-            gate = ttnn.interleaved_to_sharded(
-                gate,
-                grid_size,
-                [gate.shape[-2] // grid_size[1], gate.shape[-1] // grid_size[0]],
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-        if hidden_states.shape[-2] == 8192:
-            gate = ttnn.reallocate(gate)
-        ret = ttnn.mul(proj, gate, memory_config=gate.memory_config())
+        # if interleaved_output:
+        #     gate = ttnn.interleaved_to_sharded(
+        #         gate,
+        #         grid_size,
+        #         [gate.shape[-2] // grid_size[1], gate.shape[-1] // grid_size[0]],
+        #         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        #         ttnn.ShardOrientation.ROW_MAJOR,
+        #     )
+        # if hidden_states.shape[-2] == 8192:
+        #     gate = ttnn.reallocate(gate)
+        ret = ttnn.mul(proj, gate)
         ttnn.deallocate(proj)
         ttnn.deallocate(gate)
+        print("geglu done")
         return ret

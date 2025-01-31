@@ -72,27 +72,35 @@ class basic_transformer_block:
             end_grid = ttnn.CoreCoord(7, 3)
 
         sharded_mem_cfg = ttnn.get_memory_config(hidden_states)
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            subblock_w=1,
-            block_h=sharded_mem_cfg.shard_spec.shape[0] // 32,
-            block_w=sharded_mem_cfg.shard_spec.shape[1] // 32,
-            inplace=False,
-        )
+        # program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        #     compute_with_storage_grid_size=(8, 8),
+        #     subblock_w=1,
+        #     block_h=sharded_mem_cfg.shard_spec.shape[0] // 32,
+        #     block_w=sharded_mem_cfg.shard_spec.shape[1] // 32,
+        #     inplace=False,
+        # )
 
+        print(f"hidden_states shape: {hidden_states.shape}")
+        print(f"hidden_states memory config: {hidden_states.memory_config()}")
+
+        print(f"weights shapes : {self.parameters.norm1.weight.shape}")
+        print(f"bias shapes : {self.parameters.norm1.bias.shape}")
+
+        print(f"Out mem config: {sharded_mem_cfg}")
         norm_hidden_states = ttnn.layer_norm(
             hidden_states,
             epsilon=1e-05,
             weight=self.parameters.norm1.weight,
             bias=self.parameters.norm1.bias,
             memory_config=sharded_mem_cfg,
-            program_config=program_config,
+            # program_config=program_config,
         )
 
         # 1. Self-Attention
         cross_attention_kwargs = cross_attention_kwargs if cross_attention_kwargs is not None else {}
         cross_attention_dim = config.cross_attention_dim if cross_attention_dim is None else cross_attention_dim
 
+        print("basic_transformer_block cross attention 1")
         attn_output = self.cross_attention_1(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states if only_cross_attention else None,
@@ -125,10 +133,11 @@ class basic_transformer_block:
                 weight=self.parameters.norm2.weight,
                 bias=self.parameters.norm2.bias,
                 memory_config=sharded_mem_cfg,
-                program_config=program_config,
+                # program_config=program_config,
             )
 
             # 2. Cross-Attention
+            print("basic_transformer_block cross attention 2")
             attn_output = self.cross_attention_2(
                 hidden_states=norm_hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
@@ -152,14 +161,16 @@ class basic_transformer_block:
                 hidden_states = sum
 
         # 3. Feed-forward
+        print("basic_transformer_block layrnorm 2")
         norm_hidden_states = ttnn.layer_norm(
             hidden_states,
             epsilon=1e-05,
             weight=self.parameters.norm3.weight,
             bias=self.parameters.norm3.bias,
             memory_config=sharded_mem_cfg,
-            program_config=program_config,
+            # program_config=program_config,
         )
+        print("basic_transformer_block layrnorm 2 done")
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
@@ -167,10 +178,13 @@ class basic_transformer_block:
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         if hidden_states.shape[-2] == 8192:
             hidden_states = ttnn.reallocate(hidden_states)
+        print("basic_transformer_block ff")
         norm_hidden_states = self.ff(config=config, hidden_states=norm_hidden_states)
+        print("basic_transformer_block ff done")
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
         norm_hidden_states = ttnn.to_memory_config(norm_hidden_states, mem_cfg)
+        print("basic_transformer_block add")
         hidden_states = ttnn.add(norm_hidden_states, hidden_states, memory_config=hidden_states.memory_config())
 
         if hidden_states.memory_config().shard_spec.num_cores() == 64:
@@ -180,6 +194,8 @@ class basic_transformer_block:
         elif hidden_states.memory_config().shard_spec.num_cores() == 32:
             end_grid = ttnn.CoreCoord(3, 7)
         else:
-            assert False, f"Unsupported number of cores: {hidden_states.memory_config().shard_spec.num_cores()}"
+            print(f"Unsupported number of cores: {hidden_states.memory_config().shard_spec.num_cores()}")
+            # assert False, f"Unsupported number of cores: {hidden_states.memory_config().shard_spec.num_cores()}"
 
+        print("basic_transformer_block done")
         return hidden_states

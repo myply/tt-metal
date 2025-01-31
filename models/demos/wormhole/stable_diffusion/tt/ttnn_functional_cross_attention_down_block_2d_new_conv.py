@@ -80,6 +80,7 @@ class cross_attention_down_block_2d:
         for index, (resnet, attn) in enumerate(zip(self.resnets, self.attentions)):
             in_channels = in_channels if index == 0 else out_channels
             use_in_shortcut = True if "conv_shortcut" in resnet.parameters else False
+            print(f"CADB resnet {index}")
             hidden_states = resnet(
                 hidden_states,
                 temb=temb,
@@ -95,6 +96,7 @@ class cross_attention_down_block_2d:
                 pre_norm=resnet_pre_norm,
             )
             if not dual_cross_attention:
+                print(f"CADB attention {index}")
                 hidden_states = attn(
                     hidden_states,
                     config,
@@ -112,6 +114,7 @@ class cross_attention_down_block_2d:
             output_states += (ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG),)
 
         if add_downsample is not None:
+            print("CADB downsample 2d")
             hidden_states = self.downsample_2d(
                 in_channels=out_channels,
                 out_channels=out_channels,

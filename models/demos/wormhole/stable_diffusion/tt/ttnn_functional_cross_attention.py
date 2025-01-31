@@ -675,16 +675,18 @@ class cross_attention:
             program_config = self.program_configs["qkv"]
             # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
             interleaved_out = self.seq_len == 4096 or self.seq_len == 1024
+            print("cross attention matmul")
             qkv_out = ttnn.matmul(
                 hidden_states,
                 self.parameters.qkv.weight,
-                program_config=program_config,
+                # program_config=program_config,
                 memory_config=(
                     self.l1_interleaved_memory_config if interleaved_out else self.block_sharded_memory_config
                 ),
                 dtype=ttnn.bfloat8_b,
                 compute_kernel_config=self.compute_kernel_config,
             )
+            print("cross attention matmul done")
             ttnn.deallocate(hidden_states)
             qkv_out = ttnn.reshape(qkv_out, (2, self.seq_len, self.qkv_len))
             if interleaved_out:
@@ -712,8 +714,8 @@ class cross_attention:
             q_proj = ttnn.matmul(
                 hidden_states,
                 self.parameters.to_q.weight,
-                program_config=program_config,
-                memory_config=self.block_sharded_memory_config,
+                # program_config=program_config,
+                # memory_config=self.block_sharded_memory_config,
                 dtype=ttnn.bfloat8_b,
                 compute_kernel_config=self.compute_kernel_config,
             )
@@ -723,8 +725,8 @@ class cross_attention:
             kv_proj = ttnn.matmul(
                 encoder_hidden_states,
                 self.parameters.kv.weight,
-                program_config=program_config,
-                memory_config=self.block_sharded_memory_config,
+                # program_config=program_config,
+                # memory_config=self.block_sharded_memory_config,
                 dtype=ttnn.bfloat8_b,
                 compute_kernel_config=self.compute_kernel_config,
             )
@@ -758,10 +760,8 @@ class cross_attention:
                 ttnn.BufferType.L1,
                 output_shard_spec,
             )
-            kv_proj = ttnn.reshard(
-                kv_proj,
-                output_mem_config,
-            )
+
+            kv_proj = ttnn.to_memory_config(kv_proj, output_mem_config)
             q_proj = ttnn.reshape(q_proj, (2, 1, self.seq_len, self.q_len))
             kv_proj = ttnn.reshape(kv_proj, (2, 1, 96, self.kv_len))
             query, key, value = ttnn.experimental.create_qkv_heads_from_separate_tensors(

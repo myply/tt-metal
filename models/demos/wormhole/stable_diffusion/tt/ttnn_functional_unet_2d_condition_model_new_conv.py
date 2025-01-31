@@ -129,6 +129,7 @@ class UNet2DConditionModel:
         self.down_block_types = down_block_types
         for i, down_block_type in enumerate(down_block_types):
             if down_block_type == "CrossAttnDownBlock2D":
+                print(f"Init CrossAttnDownBlock2D {i}")
                 down_block = cross_attention_down_block_2d(
                     device,
                     parameters.down_blocks[i],
@@ -139,6 +140,7 @@ class UNet2DConditionModel:
                     conv_compute_kernel_config,
                 )
             elif down_block_type == "DownBlock2D":
+                print(f"Init DownBlock2D {i}")
                 down_block = downblock2d(
                     device,
                     parameters.down_blocks[i],
@@ -458,6 +460,7 @@ class UNet2DConditionModel:
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
             if down_block_type == "CrossAttnDownBlock2D":
+                logger.info(f"CrossAttnDownBlock2D {i}")
                 sample, res_samples = down_block(
                     hidden_states=sample,
                     temb=emb,
@@ -483,6 +486,7 @@ class UNet2DConditionModel:
                     resnet_time_scale_shift=resnet_time_scale_shift,
                 )
             elif down_block_type == "DownBlock2D":
+                logger.info(f"DownBlock2D {i}")
                 sample, res_samples = down_block(
                     hidden_states=sample,
                     temb=emb,

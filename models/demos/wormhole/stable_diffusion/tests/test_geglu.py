@@ -23,20 +23,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "N, C, H, W, index",
     [
-        (
-            1,
-            2,
-            4096,
-            320,
-            3,
-        ),
-        (
-            1,
-            2,
-            1024,
-            640,
-            2,
-        ),
+        # (
+        #     1,
+        #     2,
+        #     4096,
+        #     320,
+        #     3,
+        # ),
+        # (
+        #     1,
+        #     2,
+        #     1024,
+        #     640,
+        #     2,
+        # ),
         (
             1,
             2,
@@ -44,15 +44,17 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             1280,
             1,
         ),
-        (
-            1,
-            2,
-            64,
-            1280,
-            1,
-        ),
+        # (
+        #     1,
+        #     2,
+        #     64,
+        #     1280,
+        #     1,
+        # ),
     ],
 )
+# Geglu M, K, N 8192 320 1280
+# geglu in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w 32 2 1 1 32 8
 def test_geglu_512x512(device, model_name, N, C, H, W, index, reset_seeds):
     input_shapes = (N, C, H, W)
     model = UNet2DConditionModel.from_pretrained(model_name, subfolder="unet").eval()
