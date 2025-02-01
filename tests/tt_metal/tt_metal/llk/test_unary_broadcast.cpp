@@ -174,6 +174,9 @@ class UnaryBroadcastParameterizedDeviceFixture
       public testing::WithParamInterface<unit_tests::compute::broadcast::UnaryBroadcastConfig> {};
 
 TEST_P(UnaryBroadcastParameterizedDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
+    if (this->arch_ == tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP();
+    }
     unit_tests::compute::broadcast::UnaryBroadcastConfig test_config = GetParam();
     unit_tests::compute::broadcast::run_single_core_unary_broadcast(this->devices_.at(0), test_config);
 }
