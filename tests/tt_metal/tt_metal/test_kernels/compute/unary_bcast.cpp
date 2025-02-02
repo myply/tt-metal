@@ -8,22 +8,27 @@
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t onetile = 1;
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
     unary_bcast_init<BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    cb_wait_front(tt::CBIndex::c_0, onetile);
-    cb_reserve_back(tt::CBIndex::c_16, onetile);
+    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        cb_wait_front(tt::CBIndex::c_0, per_core_block_dim);
+        acquire_dst();
+        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
+            unary_bcast<BCAST_DIM>(tt::CBIndex::c_0, tile_index, tile_index);
+        }
 
-    acquire_dst();
+        cb_pop_front(tt::CBIndex::c_0, per_core_block_dim);
+        cb_reserve_back(tt::CBIndex::c_16, per_core_block_dim);
 
-    unary_bcast<BCAST_DIM>(tt::CBIndex::c_0, 0, 0);
+        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
+            pack_tile(tile_index, tt::CBIndex::c_16);
+        }
 
-    pack_tile(0, tt::CBIndex::c_16);
-
-    release_dst();
-
-    cb_push_back(tt::CBIndex::c_16, onetile);
-    cb_pop_front(tt::CBIndex::c_0, onetile);
+        cb_push_back(tt::CBIndex::c_16, per_core_block_dim);
+        release_dst();
+    }
 }
 }  // namespace NAMESPACE
