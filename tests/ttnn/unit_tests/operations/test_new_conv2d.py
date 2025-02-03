@@ -562,8 +562,6 @@ def test_conv_ws(
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
-
-
     stride_h = stride
     stride_w = stride
     fp32_accum = True
@@ -1470,7 +1468,6 @@ def test_unet_conv_wh(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        padded_input_channels=None,
         output_layout=output_layout,
         auto_shard=auto_shard,
     )
