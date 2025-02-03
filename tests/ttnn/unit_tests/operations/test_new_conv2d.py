@@ -858,6 +858,7 @@ def test_resnet50_conv_gs(
         use_1d_systolic_array,
         config_override=config_override,
         use_shallow_conv_variant=input_channels == 16,
+        output_layout=ttnn.TILE_LAYOUT,
         padded_input_channels=16 if input_channels == 16 else None,
         debug=not (batch_size == 20 and input_height == 115),
         auto_shard=auto_shard,
@@ -1158,6 +1159,7 @@ def test_resnet50_conv_wh_fp32(
         use_shallow_conv_variant=use_shallow_conv_variant,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        output_layout=ttnn.TILE_LAYOUT,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         auto_shard=auto_shard,
     )
