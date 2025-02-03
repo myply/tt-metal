@@ -245,6 +245,29 @@ Result conv2d(
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
         }
+        if (kernel_size[0] != 1) {
+            // log_info(tt::LogOp, "input tensor logical shape {}", input_tensor_post_tm.get_logical_shape());
+            // log_info(tt::LogOp, "input tensor padded shape {}", input_tensor_post_tm.get_padded_shape());
+            // target_shape = (1, 1, batch_size * input_height * input_width // (kernel_height * kernel_width),
+            // input_channels * kernel_height * kernel_width)
+            uint32_t padded_input_channels = input_tensor_post_tm.get_padded_shape()[-1];
+            input_tensor_post_tm = ttnn::reshape(
+                input_tensor_post_tm,
+                ttnn::Shape(
+                    {1,
+                     1,
+                     (batch_size * input_height * input_width) / (kernel_size[0] * kernel_size[1]),
+                     in_channels * kernel_size[0] * kernel_size[1]}),
+
+                ttnn::Shape(
+                    {1,
+                     1,
+                     (batch_size * input_height * input_width) / (kernel_size[0] * kernel_size[1]),
+                     padded_input_channels * kernel_size[0] * kernel_size[1]}));
+            // log_info(tt::LogOp, "Reshaped input tensor to {}", input_tensor_post_tm.get_logical_shape());
+            // log_info(tt::LogOp, "weights shape {}", weight_tensor_on_device.get_logical_shape());
+            // log_info(tt::LogOp, "weights padded shape {}", weight_tensor_on_device.get_padded_shape());
+        }
         Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
             weight_tensor_on_device,
