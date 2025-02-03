@@ -622,6 +622,7 @@ bool run_sender_channel_step(
                 ASSERT(local_sender_channel.eth_is_receiver_channel_send_done(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
                 did_something = true;
                 auto packet_header = reinterpret_cast<tt::fabric::PacketHeader*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
+                print_pkt_header(packet_header);
                 tt::fabric::validate(*packet_header);
                 if constexpr (enable_packet_header_recording) {
                     packet_header_recorder.record_packet_header(packet_header);
@@ -753,6 +754,7 @@ void run_receiver_channel_step(
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(packet_header, downstream_edm_interface);
         if (can_send_to_all_local_chip_receivers) {
+            print_pkt_header(packet_header);
             receiver_forward_packet(packet_header, downstream_edm_interface);
             wr_sent_ptr.increment();
         }
