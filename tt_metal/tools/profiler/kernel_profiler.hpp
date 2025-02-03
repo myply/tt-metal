@@ -94,7 +94,7 @@ enum class DoingDispatch { DISPATCH, NOT_DISPATCH };
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
     wIndex = CUSTOM_MARKERS;
-    profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = CUSTOM_MARKERS;
+    profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = 0;
     stackSize = 0;
 
     for (int i = 0; i < SUM_COUNT; i++) {
@@ -192,7 +192,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
     }
-    profiler_control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
+    profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
 }
 
 template <bool RECORD_ZONE = false>
@@ -254,7 +254,7 @@ __attribute__((noinline)) void finish_profiler() {
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
         profiler_data_buffer[riscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
-        int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
+        int deviceIndex = DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
         if (profiler_control_buffer[deviceIndex]) {
             uint32_t currEndIndex = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
 
@@ -323,8 +323,12 @@ struct scopePush {
                                                  ((runCounter & 0xF) << 27) | (0x1 << 31);
 #else
         if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
+            // This risc did request a noc push so wait until its data is pushed
             while (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] != 0) {
             }
+            wIndex = CUSTOM_MARKERS;
+        } else if (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] == 0) {
+            // This risc did not request a noc push but its data might have been sent so flush the buffer
             wIndex = CUSTOM_MARKERS;
         }
 #endif
@@ -334,9 +338,11 @@ struct scopePush {
 #if defined(COMPILE_FOR_BRISC)
         if (profiler_control_buffer[PROFILER_DONE] ||
             wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
+            // If any other risc has its buffer full or we are full
             finish_profiler();
         }
 #else
+        profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
         if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
             finish_profiler();
         }
@@ -369,7 +375,7 @@ struct profileScopeGuaranteed {
             start_marked = false;
             stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
 #if !defined(COMPILE_FOR_BRRISC)
-            profiler_control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
+            // profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
 #endif
         }
     }
@@ -399,10 +405,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     !defined(DISPATCH_KERNEL) || \
     !(defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)))
 
-#define DeviceZoneScopedN(name)                                                \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+#define DeviceZoneScopedN(name) ;
 
 #define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id>(data);
 
@@ -414,11 +417,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)) && \
     (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedN(name)                                                         \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
-    kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
-        kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
+#define DeviceZoneScopedN(name) ;
 
 #define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id, true>(data);
 

@@ -42,6 +42,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
     wait_for_go_message();
     // DeviceZoneScopedMainChildN("TRISC-KERNEL");
     DeviceZoneScopedMainN("TRISC-KERNEL");
+    {
+        // DeviceZoneScopedMainN("TRISC-TEST");
+    }
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);
 #endif
@@ -61,6 +64,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
     wait_for_go_message();
     // DeviceZoneScopedMainChildN("TRISC-KERNEL");
     DeviceZoneScopedMainN("TRISC-KERNEL");
+    {
+        // DeviceZoneScopedMainN("TRISC-TEST");
+    }
     run_kernel();
 #endif
 }

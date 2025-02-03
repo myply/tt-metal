@@ -418,9 +418,9 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                // if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
-                tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
-                //}
+                if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+                    tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
+                }
             } else {
                 EnqueueReadBuffer(device->command_queue(), output_dram_buffer, profile_buffer, true);
             }

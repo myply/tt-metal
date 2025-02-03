@@ -44,6 +44,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
     {
         // DeviceZoneScopedMainChildN("BRISC-KERNEL");
         DeviceZoneScopedMainN("BRISC-KERNEL");
+        {
+            DeviceZoneScopedMainN("TEST");
+        }
         kernel_main();
     }
 #endif

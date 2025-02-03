@@ -448,9 +448,9 @@ int main() {
             //  "invalid" iterations.
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
-            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
-            // DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
-            //  Copies from L1 to IRAM on chips where NCRISC has IRAM
+            // DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+            //  DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+            //   Copies from L1 to IRAM on chips where NCRISC has IRAM
             uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
             int ncrisc_index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
             uint32_t ncrisc_kernel_src_address =

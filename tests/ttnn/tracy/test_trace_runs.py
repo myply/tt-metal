@@ -36,5 +36,6 @@ def test_with_ops(device):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    for i in range(5):
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
