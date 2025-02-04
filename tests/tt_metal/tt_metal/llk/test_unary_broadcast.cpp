@@ -120,6 +120,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
     return tilized_packed_res;
 }
 
+// TODO : Remove debug code , input vector.
 bool check_is_close(
     std::vector<bfloat16>& input,
     std::vector<uint32_t>& packed_golden,
@@ -130,6 +131,7 @@ bool check_is_close(
         result = is_close_packed_vectors<bfloat16, uint32_t>(
             packed_golden, device_res, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.0); });
     } else if (T_out == tt::DataFormat::Bfp8_b) {
+        // TODO: This tolerance is very high. It should be zero for 1.0 to 2.0
         float atol = 0.03125f;
         auto gold_refloat = unpack_bfp8_tiles_into_float_vec(packed_golden, true, false);
         auto res_refloat = unpack_bfp8_tiles_into_float_vec(device_res, true, false);
