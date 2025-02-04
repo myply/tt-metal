@@ -17,9 +17,13 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_left_shift(const uint shift_amt) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(0,12,ADDR_MOD_7,0);
-        TT_SFPSHFT(shift_amt,0,0,1);
-        TTI_SFPSTORE(0,12,ADDR_MOD_7,0);
+        vInt val = dst_reg[0];
+        vInt v = val;
+
+        val = val << shift_amt;
+        val = setsgn(val, v);
+        dst_reg[0] = val;
+
         dst_reg++;
     }
 }
