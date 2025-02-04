@@ -98,7 +98,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             tilized_packed_res = unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
             std::vector<float> tempfp32v;
-            tempfp32v.reserve(vBroadcast.size());
+            tempfp32v.resize(vBroadcast.size());
             for (int i = 0; i < vBroadcast.size(); i++) {
                 tempfp32v[i] = vBroadcast[i].to_float();
             }
@@ -107,7 +107,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
     } else if constexpr (std::is_same<float, T_in>::value) {
         if (T_out == tt::DataFormat::Float16_b) {
             std::vector<bfloat16> tempfp16bv;
-            tempfp16bv.reserve(vBroadcast.size());
+            tempfp16bv.resize(vBroadcast.size());
             for (int i = 0; i < vBroadcast.size(); i++) {
                 tempfp16bv[i] = vBroadcast[i];
             }
@@ -120,7 +120,47 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
     return tilized_packed_res;
 }
 
-auto GetBufferHelper(tt_metal::IDevice* device, tt::DataFormat dformat, uint32_t num_tiles) {
+bool check_is_close(
+    std::vector<bfloat16>& input,
+    std::vector<uint32_t>& packed_golden,
+    std::vector<uint32_t>& device_res,
+    tt::DataFormat T_out) {
+    bool result = true;
+    if (T_out == tt::DataFormat::Float16_b) {
+        result = is_close_packed_vectors<bfloat16, uint32_t>(
+            packed_golden, device_res, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.0); });
+    } else if (T_out == tt::DataFormat::Bfp8_b) {
+        float atol = 0.03125f;
+        auto gold_refloat = unpack_bfp8_tiles_into_float_vec(packed_golden, true, false);
+        auto res_refloat = unpack_bfp8_tiles_into_float_vec(device_res, true, false);
+        if (gold_refloat.size() != res_refloat.size()) {
+            TT_THROW(
+                "Mismatch in size of vectors for comparison A.size={} B.size={}",
+                gold_refloat.size(),
+                res_refloat.size());
+        }
+        // float max = 0;
+        for (int i = 0; i < gold_refloat.size(); i++) {
+            // std::cout << i << " "  <<  gold_refloat[i] << "  " <<  res_refloat[i] << " " <<  input[i].to_float();
+            // max = std::max(max, std::fabs(gold_refloat[i] - res_refloat[i]));
+            if (std::fabs(gold_refloat[i] - res_refloat[i]) > atol) {
+                TT_THROW(
+                    "Mismatch  A={} B={} input={} atol={} i={}",
+                    gold_refloat[i],
+                    res_refloat[i],
+                    input[i].to_float(),
+                    atol,
+                    i);
+                result = false;
+                break;
+            }
+        }
+    }
+
+    return result;
+}
+
+auto CreateDramBuffer(tt_metal::IDevice* device, tt::DataFormat dformat, uint32_t num_tiles) {
     uint32_t single_tile_size = tile_size(dformat);
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
     tt_metal::InterleavedBufferConfig dram_config{
@@ -140,7 +180,7 @@ CBHandle CreateCircularBufferHelper(
     return tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
 }
 
-void get_packed_tilized_input_output_pair(
+std::vector<bfloat16> get_packed_tilized_input_output_pair(
     tt::DataFormat in_t,
     tt::DataFormat out_t,
     uint32_t num_tiles,
@@ -150,18 +190,20 @@ void get_packed_tilized_input_output_pair(
     constexpr uint32_t tile_width = 32;
     constexpr uint32_t tile_height = 32;
     constexpr uint32_t num_single_tile_elem = tile_width * tile_height;
-
+    std::vector<bfloat16> debug;
     if (in_t == tt::DataFormat::Float16_b) {
         std::vector<bfloat16> input = generate_uniform_random_vector<bfloat16>(
-            -1.0f, 1.0f, num_tiles * num_single_tile_elem, std::chrono::system_clock::now().time_since_epoch().count());
+            1.0f, 2.0f, num_tiles * num_single_tile_elem, std::chrono::system_clock::now().time_since_epoch().count());
 
         unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = num_tiles, .num_tiles_c_dim = 1};
         auto packed_input = pack_vector<uint32_t, bfloat16>(input);
         packed_tilized_input = unit_tests::compute::gold_standard_tilize(packed_input, config);
         packed_tilized_output =
             get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
+        debug = input;
     } else {
     }
+    return debug;
 }
 
 void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroadcastConfig& test_config) {
@@ -175,8 +217,8 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
     tt::DataFormat in0_t = test_config.in0_t;
     tt::DataFormat out0_t = test_config.out0_t;
 
-    auto src_dram_buffer_0 = GetBufferHelper(device, in0_t, num_tiles);
-    auto dst_dram_buffer_0 = GetBufferHelper(device, out0_t, num_tiles);
+    auto src_dram_buffer_0 = CreateDramBuffer(device, in0_t, num_tiles);
+    auto dst_dram_buffer_0 = CreateDramBuffer(device, out0_t, num_tiles);
     auto l1_src_cb_0 = CreateCircularBufferHelper(program, core, block_size * 2, in0_t, 0);
     auto l1_dst_cb_0 = CreateCircularBufferHelper(program, core, block_size * 2, out0_t, 16);
 
@@ -225,18 +267,14 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
         });
 
     std::vector<uint32_t> packed_tilized_input_0, golden_packed_tilized_output_0;
-    get_packed_tilized_input_output_pair(
+    auto debug = get_packed_tilized_input_output_pair(
         in0_t, out0_t, num_tiles, test_config.broadcast_dim, packed_tilized_input_0, golden_packed_tilized_output_0);
     tt_metal::detail::WriteToBuffer(src_dram_buffer_0, packed_tilized_input_0);
     tt_metal::detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data_0;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer_0, dest_buffer_data_0);
-
-    bool result = is_close_packed_vectors<bfloat16, uint32_t>(
-        dest_buffer_data_0, golden_packed_tilized_output_0, [&](const bfloat16& a, const bfloat16& b) {
-            return is_close(a, b, 0.0);
-        });
+    bool result = check_is_close(debug, golden_packed_tilized_output_0, dest_buffer_data_0, out0_t);
 
     ASSERT_TRUE(result);
 }
@@ -260,6 +298,10 @@ INSTANTIATE_TEST_SUITE_P(
     ComputeSingleTileUnaryBroadcast,
     UnaryBroadcastParameterizedDeviceFixture,
     ::testing::Values(
+        (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
+        (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
+        (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
+        (UnaryBroadcastConfig){BroadcastDim::SCALAR, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
         (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
         (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
         (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
