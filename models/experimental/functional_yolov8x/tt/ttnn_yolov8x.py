@@ -164,11 +164,11 @@ def Bottleneck(
     ttnn.deallocate(cv1)
 
     if tilize:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=device)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     add = shortcut
 
-    return x + cv2 if add else cv2
+    return ttnn.add(x, cv2, memory_config=ttnn.L1_MEMORY_CONFIG) if add else cv2
 
 
 def C2f(
@@ -264,7 +264,7 @@ def SPPF(device, x, parameters, path, in_h, in_w, k=5):
 
     p = k // 2
 
-    cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
+    cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     y = [cv1]
     for i in range(3):
