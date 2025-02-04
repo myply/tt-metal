@@ -4,7 +4,7 @@
 
 //
 // TT_METAL_LOGGER_LEVEL=FATAL ./build/test/tt_metal/perf_microbenchmark/3_pcie_transfer/pcie_bench_wormhole_b0
-// --benchmark_out=benchdata.txt --benchmark_out_format=csv
+// --benchmark_out=benchdata.json --benchmark_out_format=json
 //
 
 #include <cassert>
@@ -36,7 +36,6 @@
 #include <cstdint>
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::dispatch;  // _KB, _MB, _GB
 using namespace std::chrono_literals;    // s
 
 static constexpr uint32_t k_MemCpyAlignment = sizeof(__m256i);  // Largest instruction in memcpy impl
