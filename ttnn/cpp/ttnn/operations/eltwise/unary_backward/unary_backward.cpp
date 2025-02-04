@@ -5,10 +5,8 @@
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -25,6 +23,7 @@
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -1774,7 +1773,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
     const Tensor& grad,
     const Tensor& input,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
@@ -1794,7 +1793,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         ttnn::SmallVector<int64_t> dim = {0};
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
-        const auto required = ttnn::SimpleShape(intended_shape_array);
+        const auto required = ttnn::Shape(intended_shape_array);
         Tensor result = ttnn::moreh_sum(
             grad,
             dim,
@@ -1813,7 +1812,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         ttnn::SmallVector<int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
-        const auto required = ttnn::SimpleShape(intended_shape_array);
+        const auto required = ttnn::Shape(intended_shape_array);
         Tensor result = ttnn::moreh_sum(
             grad,
             dim,
@@ -1837,7 +1836,7 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-            temp.get_legacy_shape(), false, false, true, true);
+            temp.get_padded_shape(), false, false, true, true);
         if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
                 temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);

@@ -3,17 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
 // Generic NLP CreateHeads op for decode
-void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
+void NLPCreateHeadsDecodeDeviceOperation::validate(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& batch_offset = optional_input_tensors.at(0);
+
     // TODO: Rewrite validation for this decode case
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
@@ -41,7 +43,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
             "Current input memory layout is {}. It must be width sharded",
             QKV_memcfg.memory_layout);
         TT_FATAL(
-            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1],
+            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
             "Shard shape must be correct");
         TT_FATAL(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
@@ -53,6 +55,14 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
                 this->head_dim % input_tensor.shard_spec().value().shape[1] == 0,
                 "We don't support partial heads in shards when q and k heads are not overlapping coregrid");
         }
+        TT_FATAL(
+            !(batch_offset.has_value() ^ this->slice_size.has_value()),
+            "Both batch_offset and slice_size must be provided or neither");
+        if (batch_offset.has_value() && this->slice_size.has_value()) {
+            TT_FATAL(batch_offset.value().get_logical_shape()[0] == 1, "batch_offset must be unary tensor");
+            num_users = this->slice_size.value();
+        }
+
     } else {
         TT_FATAL(this->overlap_qk_coregrid, "Overlap_qk_coregrid must be true for non-sharded input");
     }
@@ -63,8 +73,6 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
             this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
         "Output tensor must be height sharded");
 
-    auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-
     // Support maximum 32 heads for now
     TT_FATAL(this->num_q_heads <= 32, "There are {} q heads only 32 are supported", this->num_q_heads);
     TT_FATAL(
@@ -73,50 +81,45 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
         this->num_q_heads,
         this->num_kv_heads);
 
-    uint32_t num_cores = core_grid.x * core_grid.y;
+    uint32_t num_cores;
+    if (this->input_on_subcoregrids) {
+        auto input_core_grid = input_tensor.shard_spec().value().grid;
+        num_cores = input_core_grid.num_cores();
+
+    } else {
+        auto core_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+        num_cores = core_grid_size.x * core_grid_size.y;
+    }
     // 1 User Per Core Max and 32 users for now
     if (this->overlap_qk_coregrid) {
         TT_FATAL(num_cores >= num_users, "Grid Size is {}. Need at least 32 cores for decode", num_cores);
     } else {
         TT_FATAL(
             num_cores >= 2 * num_users,
-            "Grid Size is {}. Need cores atleast double of num_users for decode when q and k heads are not overlapping "
+            "Input coregrid size is {}. Need cores atleast double of num_users for decode when q and k heads are not "
+            "overlapping "
             "coregrid",
             num_cores);
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> NLPCreateHeadsDecodeDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
 
-    auto batch = input_tensor.get_shape()[2];
+    auto batch = input_shape[2];
+    if (this->slice_size.has_value()) {
+        batch = this->slice_size.value();
+    }
+
     auto head_dim = this->head_dim;
 
-    // pad up to nearest multiple of TILE_HEIGHT for num_q_heads and num_kv_heads
-    auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = ((this->num_kv_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    const Shape q_output_shape({input_shape[0], batch, this->num_q_heads, head_dim});
+    const Shape v_output_shape({input_shape[0], batch, this->num_kv_heads, head_dim});
+    const Shape k_output_shape = v_output_shape;
 
-    const tt::tt_metal::LegacyShape q_output_shape = tt::tt_metal::LegacyShape(
-        {input_shape[0], batch, this->num_q_heads, head_dim}, {input_shape[0], batch, num_q_heads_padded, head_dim});
-    const tt::tt_metal::LegacyShape v_output_shape = tt::tt_metal::LegacyShape(
-        {input_shape[0], batch, this->num_kv_heads, head_dim}, {input_shape[0], batch, num_kv_heads_padded, head_dim});
-    const tt::tt_metal::LegacyShape k_output_shape = v_output_shape;
-    return {q_output_shape, k_output_shape, v_output_shape};
-}
-
-std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    using namespace tt::constants;
-    const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shapes = this->compute_output_shapes(input_tensors);
-    const auto& q_output_shape = output_shapes[0];
-
-    auto batch = q_output_shape[1];
     auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
@@ -134,7 +137,6 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(
                 num_cores_to_corerangeset(CoreCoord{batch % core_grid.x, batch / core_grid.x}, batch, core_grid, true);
         }
         v_shard_grid = q_shard_grid;
-
     } else {
         auto input_core_grid = input_tensor.shard_spec().value().grid;
         auto start_core_coord = input_core_grid.bounding_box().start_coord;
@@ -159,17 +161,24 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(
     v_mem_config.shard_spec = v_shard_spec;
 
     return {
-        create_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
-        create_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), k_mem_config),
-        create_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), v_mem_config)
-    };
+        TensorSpec(
+            q_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), q_mem_config)),
+        TensorSpec(
+            k_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), k_mem_config)),
+        TensorSpec(
+            v_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), v_mem_config))};
 }
 
 operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-
+    auto& batch_offset = optional_input_tensors.at(0);
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     return multi_core_nlp_create_qkv_heads_decode(
         input_tensor,
@@ -178,6 +187,8 @@ operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_prog
         this->head_dim,
         this->overlap_qk_coregrid,
         this->input_on_subcoregrids,
+        batch_offset,
+        this->slice_size,
         output_tensors,
         compute_with_storage_grid_size);
 }

@@ -319,7 +319,7 @@ def test_embedding_tiled_sharded_output(
         shard_shape = (fused_height // (num_cores_x * num_cores_y), width)
     else:
         shard_shape = (fused_height // num_cores_y, width // num_cores_x)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(
         output_memory_layout,
         ttnn.BufferType.L1,
@@ -392,7 +392,6 @@ def test_tg_llama_sharded_embedding(
         shard_grid,
         (batch_size * sentence_size // num_cores, hidden_embedding_dim),
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -413,7 +412,7 @@ def test_tg_llama_sharded_embedding(
     output_tensor = ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT, memory_config=output_mem_config)
     output_tensor = ttnn.reshape(
         output_tensor,
-        ttnn.Shape((batch_size, 1, hidden_embedding_dim), (batch_size, sentence_size, hidden_embedding_dim)),
+        ttnn.Shape((batch_size, 1, hidden_embedding_dim)),
     )
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(output_tensor, torch_output_tensor[:, 0, :].unsqueeze(1))

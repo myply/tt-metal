@@ -5,8 +5,8 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
-#include "ttnn/cpp/ttnn/tensor/types.hpp"
-#include "ttnn/cpp/ttnn/tensor/tensor.hpp"
+#include "cpp/ttnn/tensor/types.hpp"
+#include "cpp/ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -165,13 +165,12 @@ enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 // provided, the shard shape will be inferred from the tensor shape and the
 // shard strategy.
 ttnn::MemoryConfig create_sharded_memory_config(
-    const ttnn::SimpleShape& logical_shape,
+    const ttnn::Shape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,
     std::optional<std::array<uint32_t, 2>> shard_shape = std::nullopt,
-    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR,
-    bool halo = false);
+    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR);
 
 std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coord(
     const std::span<const uint32_t>& tensor_shape,

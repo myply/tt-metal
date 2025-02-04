@@ -30,6 +30,36 @@ protected:
     }
 };
 
+TEST_F(N300UtilsTest, TestXTensorReplicateInt32) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto mesh_shape = device->shape();
+    xt::xarray<int32_t> test_data = {30, 20, 2};
+    xt::xarray<int32_t> xtensor = test_data.reshape({1, 1, 1, 3});
+    ttml::core::XTensorToMeshVariant<int32_t> replicate_composer =
+        ttml::core::ReplicateXTensorToMesh<int32_t>(mesh_shape);
+    auto tensor = ttml::core::from_xtensor<int32_t, DataType::INT32>(xtensor, device, replicate_composer);
+    ttml::core::MeshToXTensorVariant<int32_t> identity_composer = ttml::core::VectorMeshToXTensor<int32_t>(mesh_shape);
+    auto xtensors_back = ttml::core::to_xtensor<int32_t>(tensor, identity_composer);
+
+    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[0]));
+    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
+}
+
+TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto mesh_shape = device->shape();
+    xt::xarray<uint32_t> test_data = {30U, 20U, 2U};
+    xt::xarray<uint32_t> xtensor = test_data.reshape({1, 1, 1, 3});
+    ttml::core::XTensorToMeshVariant<uint32_t> replicate_composer =
+        ttml::core::ReplicateXTensorToMesh<uint32_t>(mesh_shape);
+    auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device, replicate_composer);
+    ttml::core::MeshToXTensorVariant<uint32_t> identity_composer =
+        ttml::core::VectorMeshToXTensor<uint32_t>(mesh_shape);
+    auto xtensors_back = ttml::core::to_xtensor<uint32_t>(tensor, identity_composer);
+    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[0]));
+    EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
+}
+
 TEST_F(N300UtilsTest, TestXTensorReplicate) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
@@ -162,7 +192,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
 
     auto gathered_ta =
         ttnn::all_gather(tensor_a, 3 /*, {0, 4}, 1 ,std::nullopt, std::nullopt, std::nullopt, std::nullopt*/);
-    fmt::print("gathered_ta shape: {}\n", gathered_ta.get_shape().logical_shape());
+    fmt::print("gathered_ta shape: {}\n", gathered_ta.get_logical_shape());
     auto mul_tensor = ttnn::matmul(
         gathered_ta,
         tensor_b,
@@ -181,4 +211,26 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
 
     // (128, 64) X (64, 256) => (128, 256)
     EXPECT_TRUE(xt::allclose(mul_res, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
+}
+
+TEST_F(N300UtilsTest, DropoutDifferentSeed) {
+    uint32_t dropout_seed1 = 42;
+    float scale = 2.0F;
+    float prob = 0.5F;
+    xt::random::seed(42);
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto mesh_shape = device->shape();
+    device->enable_program_cache();
+    auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};
+    for (auto& shape : shapes) {
+        fmt::println("Testing shape: {}", shape);
+        xt::xarray<float> xtensor = xt::ones<float>(shape);
+        ttml::core::XTensorToMeshVariant<float> replicate_composer =
+            ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
+        auto xtensor_tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer);
+        auto out_tensor = ttnn::experimental::dropout(xtensor_tensor, prob, scale, dropout_seed1);
+        ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
+        auto xtensors_back = ttml::core::to_xtensor(out_tensor, identity_composer);
+        EXPECT_FALSE(xt::allclose(xtensors_back[0], xtensors_back[1], /*rtol=*/1e-4, /*atol=*/1e-3));
+    }
 }

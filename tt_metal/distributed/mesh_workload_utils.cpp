@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <host_api.hpp>
+#include <command_queue.hpp>
+
 #include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -24,8 +25,9 @@ void write_program_commands(
     // supports all runtime features, this will be removed, and program dispatch commands will be written
     // directly through dedicated interfaces.
 
-    uint32_t num_workers_in_cq = cq.device()->hw_command_queue(cq.id()).get_expected_num_workers_completed_for_sub_device(sub_device_index);
-    cq.device()->hw_command_queue(cq.id()).set_expected_num_workers_completed_for_sub_device(sub_device_index, num_workers_in_cq + num_active_cores_in_program);
+    uint32_t num_workers_in_cq = cq.get_expected_num_workers_completed_for_sub_device(sub_device_index);
+    cq.set_expected_num_workers_completed_for_sub_device(
+        sub_device_index, num_workers_in_cq + num_active_cores_in_program);
     // Write program command stream to device
     program_dispatch::write_program_command_sequence(
         program_cmd_seq,
@@ -62,7 +64,7 @@ void write_go_signal(
     run_program_go_signal.dispatch_message_offset = 0;
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(cq.device()->id());
-    uint32_t dispatch_message_addr = dispatch_constants::get(dispatch_core_type)
+    uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type)
                                          .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
     go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(

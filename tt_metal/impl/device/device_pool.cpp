@@ -2,15 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <device_pool.hpp>
+#include <device_impl.hpp>
 
 #include <numa.h>
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
+#include "dispatch_core_manager.hpp"
+#include "dispatch_settings.hpp"
+#include "dprint_server.hpp"
+#include "host_api.hpp"
+#include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 using namespace tt::tt_metal;
 
@@ -169,12 +179,16 @@ void DevicePool::init_profiler_devices() const {
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto mmio_device = get_device(mmio_controlled_device_id);
-                    log_info(tt::LogMetal, "Starting profiler on device {}", mmio_device->id());
                     detail::InitDeviceProfiler(mmio_device);
+                    log_info(
+                        tt::LogMetal,
+                        "Profiler started on remote device {}",
+                        mmio_device->id());
                 }
             }
         }
     }
+    detail::ProfilerSync(ProfilerSyncState::INIT);
 #endif
 }
 
@@ -187,7 +201,12 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+    // Initialize the dispatch core manager, responsible for assigning dispatch cores
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    // Initialize the dispatch query layer, used by runtime command generation
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
+    // Initialize DispatchSettings with defaults
+    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -242,7 +261,6 @@ void DevicePool::initialize_device(IDevice* dev) const {
         dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
-        dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
@@ -476,6 +494,8 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
+    ZoneScoped;
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -494,6 +514,8 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
+    ZoneScoped;
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
@@ -542,9 +564,9 @@ DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool
+            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
-            // dispatch_constants to the device, so it doesn't go out of scope before the device is closed.
+            // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
         }
     }

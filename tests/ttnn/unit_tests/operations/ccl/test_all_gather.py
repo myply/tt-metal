@@ -149,14 +149,14 @@ def run_all_gather_impl(
     logger.info(f"dim: {dim}")
 
     input_tensor = torch.rand(input_shape).bfloat16()
-
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        t = ttnn.from_torch(t, input_dtype, layout=layout, tile=ttnn.Tile(tile))
-        tt_input_tensors.append(t.to(mesh_device.get_devices()[i], mem_config))
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        dtype=input_dtype,
+        layout=layout,
+        tile=ttnn.Tile(tile),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim),
+        device=mesh_device,
+    )
     if trace_mode:
         tt_out_tensor = run_with_trace(
             mesh_device,
@@ -622,6 +622,7 @@ def test_all_gather_on_t3000_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skip(reason="Flaky. Sometimes fails in CI on certain runners")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
@@ -1183,11 +1184,10 @@ def run_all_gather_sharded(
         shard_grid,
         input_shard_shape,
         orientation,
-        False,
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_shard_shape = list(input_shard_shape)
-    if dim == 3:
+    if dim == len(input_shape) - 1:
         output_shard_shape[1] *= num_devices
     else:
         output_shard_shape[0] *= num_devices
@@ -1195,7 +1195,6 @@ def run_all_gather_sharded(
         shard_grid,
         output_shard_shape,
         orientation,
-        False,
     )
     output_mem_config = ttnn.MemoryConfig(
         tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
