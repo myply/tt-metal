@@ -32,6 +32,104 @@ uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint
 
 namespace ttnn::operations::data_movement::detail {
 
+tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_multi_core(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
+    tt::log_info("RUNNING TILED 2 TENSOR CONCAT!");
+    TT_FATAL(dim == 3, "Sharded concat TILED only supports dim=3");
+    TT_FATAL(groups == 1 || dim == 3, "Sharded concat RM only supports groups > 1 when dim=3");
+    TT_FATAL(
+        input_tensors.size() == 2 && input_tensors[0].get_padded_shape()[-1] % groups == 0 &&
+            input_tensors[0].get_padded_shape()[-1] % groups == 0,
+        "Input channels must both be evenly divisible by groups");
+
+    // TODO: ASSERT on the fact that we don't support padded shard, HW % cores must be 0
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    const uint32_t num_input_tensors = 2;  // this is always the case in this fn
+    std::vector<CBHandle> cb_inputs(num_input_tensors);
+
+    auto all_cores = input_tensors[0].shard_spec().value().grid;  // assume all inputs have same grid
+
+    const auto create_circular_buffer = [&program, &cores = all_cores](
+                                            uint32_t index,
+                                            uint32_t num_tiles,
+                                            uint32_t tile_size,
+                                            const tt::DataFormat& format,
+                                            Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
+        tt::log_info(
+            "Creating CB (id={}) with {} tile(s) ({} B each, total size {} B)",
+            index,
+            num_tiles,
+            tile_size,
+            tile_size * num_tiles);
+        tt::tt_metal::CircularBufferConfig config =
+            tt::tt_metal::CircularBufferConfig(num_tiles * tile_size, {{index, format}})
+                .set_page_size(index, tile_size);
+        if (buffer) {
+            config.set_globally_allocated_address(*buffer);
+        }
+        return tt::tt_metal::CreateCircularBuffer(program, cores, config);
+    };
+
+    // TODO: ASSERT SAME INPUT DTYPE
+    //
+
+    for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
+        const auto& input_tensor = input_tensors.at(idx);
+        const auto shard_shape = input_tensor.shard_spec()->shape;
+        // TODO: ASSERT NO PADDING or else invalid
+        const auto num_tiles = (shard_shape[0] / TILE_HEIGHT) * (shard_shape[1] / TILE_HEIGHT);
+        const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+        const auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+        cb_inputs[idx] = create_circular_buffer(idx, num_tiles, tile_size, data_format, input_tensor.buffer());
+    }
+
+    const auto shard_shape = output.shard_spec()->shape;
+    const auto num_output_tiles = (shard_shape[0] / TILE_HEIGHT) * (shard_shape[1] / TILE_HEIGHT);
+    const auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
+    const auto output_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
+    const uint32_t cb_output_id = cb_inputs.size();
+    CBHandle cb_output =
+        create_circular_buffer(cb_output_id, num_output_tiles, output_tile_size, output_data_format, output.buffer());
+
+    const bool is_rm_shard_orientation = output.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_shard_orientation);
+    CoreCoord end_core = cores[cores.size() - 1];
+    for (const auto& core : cores) {
+        std::vector<uint32_t> compile_time_args_0 = {
+            0,
+            2,
+        };
+        tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
+            "reader_height_sharded_width_concat_two_tensors_tiled.cpp",
+            core,
+            tt_metal::ReaderDataMovementConfig(compile_time_args_0));
+    }
+
+    auto override_runtime_arguments_callback = [num_input_tensors, cb_inputs, cb_output](
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
+        for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
+            tt::log_info("Updating {}", idx);
+            UpdateDynamicCircularBufferAddress(program, cb_inputs[idx], *input_tensors[idx].buffer());
+            tt::log_info("Done Updating {}", idx);
+        }
+        tt::log_info("Updating output");
+        UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
+        tt::log_info("DONE!");
+    };
+
+    tt::log_info("Returning program");
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+}
+
 tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
     TT_FATAL(dim == 3, "Sharded concat RM only supports dim=3");
@@ -224,16 +322,16 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-// Concat sharded tensors into sharded output in row-major/tile layout. Currently it only supports height-sharded width
-// concat or width-sharded height concat.
+// Concat sharded tensors into sharded output in row-major/tile layout. Currently it only supports height-sharded
+// width concat or width-sharded height concat.
 //
-// It is done by copying each row of each input sharded tensor to the right offset in the sharded output tensor based on
-// the sharded output width in bytes (output stride). This way works for both width and height concat.
+// It is done by copying each row of each input sharded tensor to the right offset in the sharded output tensor
+// based on the sharded output width in bytes (output stride). This way works for both width and height concat.
 //
-// For example in width concat, rows of an input tensor are placed at the same column offset but sequential rows in the
-// output. The memory address gap between neighbor input rows is exactly the output width. In height concat, all input
-// rows are placed at column 0 but sequential rows in the output. The address gap between neighbor input rows is still
-// the output width (which is equal to the input width).
+// For example in width concat, rows of an input tensor are placed at the same column offset but sequential rows in
+// the output. The memory address gap between neighbor input rows is exactly the output width. In height concat, all
+// input rows are placed at column 0 but sequential rows in the output. The address gap between neighbor input rows
+// is still the output width (which is equal to the input width).
 tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output) {
     TT_FATAL(dim == 2 || dim == 3, "Sharded concat only supports dim=2 or 3");
@@ -493,14 +591,21 @@ tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
     if (output.is_sharded()) {
         if (input_tensors.size() == 2) {
-            // TODO(jerrysky3): Keep the unrolled two tensor concat tensor for now but it only supports height-sharded
-            // width concat. Need to unroll s2s_rm_concat_multi_core if width-sharded height concat is needed for this
-            // case.
-            return s2s_rm_concat_two_tensors_height_multi_core(input_tensors, dim, output, groups);
+            // There are unrolled kernels for the case where we have 2 hight-sharded kernels. Currently
+            // we only support 2 tile inputs OR 2 row-major inputs.
+            TT_FATAL(
+                input_tensors.at(0).layout() == input_tensors.at(1).layout(),
+                "Expected all input tensors to have the same layout");
+            if (input_tensors.at(0).layout() == Layout::ROW_MAJOR) {
+                return s2s_rm_concat_two_tensors_height_multi_core(input_tensors, dim, output, groups);
+            } else {
+                return s2s_tiled_concat_two_tensors_height_multi_core(input_tensors, dim, output, groups);
+            }
         } else {
             TT_FATAL(
                 groups == 1,
-                "Sharded ttnn.concat with groups > 1 is only supported for 2 sharded input and sharded output tensors");
+                "Sharded ttnn.concat with groups > 1 is only supported for 2 sharded input and sharded output "
+                "tensors");
             return s2s_concat_multi_core(input_tensors, dim, output);
         }
     } else {
@@ -660,7 +765,8 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         program,
         rm_layout
             ? "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+              "writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
