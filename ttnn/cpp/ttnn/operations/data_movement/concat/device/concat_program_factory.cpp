@@ -95,10 +95,12 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
 
     const bool is_rm_shard_orientation = output.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_shard_orientation);
-    CoreCoord end_core = cores[cores.size() - 1];
+
+    // TODO: Handle case where the final shard has padding (i.e. shard_dim * num_cores != tensor_dim)
     for (const auto& core : cores) {
         std::vector<uint32_t> compile_time_args_0 = {
             0,
+            1,
             2,
         };
         tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
