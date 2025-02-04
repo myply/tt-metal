@@ -203,7 +203,11 @@ std::vector<bfloat16> get_packed_tilized_input_output_pair(
         packed_tilized_output =
             get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
         debug = input;
-    } else {
+    } else if (in_t == tt::DataFormat::Bfp8_b) {
+        packed_tilized_input = create_random_vector_of_bfp8(num_tiles * tile_size(in_t), false, 1, 1.0);
+        std::vector<float> input = unpack_bfp8_tiles_into_float_vec(packed_tilized_input, true, false);
+        packed_tilized_output =
+            get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
     }
     return debug;
 }
@@ -300,6 +304,14 @@ INSTANTIATE_TEST_SUITE_P(
     ComputeSingleTileUnaryBroadcast,
     UnaryBroadcastParameterizedDeviceFixture,
     ::testing::Values(
+        (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
+        (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
+        (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
+        (UnaryBroadcastConfig){BroadcastDim::SCALAR, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
+        (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b},
+        (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b},
+        (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b},
+        (UnaryBroadcastConfig){BroadcastDim::SCALAR, tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b},
         (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
         (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
         (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
