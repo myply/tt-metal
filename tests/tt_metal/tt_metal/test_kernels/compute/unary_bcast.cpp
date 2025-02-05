@@ -32,7 +32,7 @@ void MAIN {
     }
 
     reconfigure_unary_bcast<BCAST_DIM_0, BCAST_DIM_1>(
-        tt::CBIndex::c_0, tt : CBIndex::c_1, tt::CBIndex::c_16, tt::CBIndex::c17);
+        tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, tt::CBIndex::c_17);
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_wait_front(tt::CBIndex::c_1, per_core_block_dim);

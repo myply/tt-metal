@@ -285,8 +285,8 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
     std::vector<uint32_t> dest_buffer_data_1;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer_1, dest_buffer_data_1);
 
-    bool result = check_is_close(debug, golden_packed_tilized_output_0, dest_buffer_data_0, out0_t);
-    result &= check_is_close(debug, golden_packed_tilized_output_1, dest_buffer_data_1, out1_t);
+    bool result = check_is_close(golden_packed_tilized_output_0, dest_buffer_data_0, out0_t);
+    result &= check_is_close(golden_packed_tilized_output_1, dest_buffer_data_1, out1_t);
 
     ASSERT_TRUE(result);
 }
