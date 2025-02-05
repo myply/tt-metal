@@ -55,6 +55,39 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
         dst_tile_index, icb)));
 }
 
+template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
+void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
+    // Pass through uses A2D and potentially direct unpack to dest.
+    const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
+    const bool enable_unpack_to_dest = data_copy_type == A2D;
+    const std::uint32_t new_operand_id = get_operand_id(new_icb);
+    const std::uint32_t old_operand_id = get_operand_id(old_icb);
+    bool unpacker_src_format_change = unpack_src_format[new_operand_id] != unpack_src_format[old_operand_id];
+    bool unpacker_dst_format_change = unpack_dst_format[new_operand_id] != unpack_dst_format[old_operand_id];
+    bool bcast_type_change = (old_bcast_type != new_bcast_type);
+
+    if (unpacker_src_format_change || unpacker_dst_format_change) {
+        // Will configure A & B in similar way
+        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(new_icb)));
+    }
+
+    if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
+        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
+            false, false /*transpose within 16x16 face*/, new_icb)));
+    }
+
+    if (unpacker_dst_format_change) {
+        MATH((llk_math_hw_configure_disaggregated(new_icb, new_icb)));
+    }
+
+    if (unpacker_dst_format_change || bcast_type_change) {
+        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, bcast_type, DST_ACCUM_MODE>(
+            false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
+    }
+
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_ocb, new_ocb)));
+}
+
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
  */

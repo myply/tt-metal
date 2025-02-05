@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 
 namespace unit_tests::compute::broadcast {
 
-enum BroadcastDim : uint8_t { ROW = 0, COL = 1, SCALAR = 2, NONE = 3 };
+enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
 const map<BroadcastDim, string> broadcast_dim_to_type = {
     {BroadcastDim::ROW, "BroadcastType::ROW"},
@@ -29,9 +29,12 @@ const map<BroadcastDim, string> broadcast_dim_to_type = {
     {BroadcastDim::NONE, "BroadcastType::NONE"}};
 
 struct UnaryBroadcastConfig {
-    BroadcastDim broadcast_dim;
+    BroadcastDim broadcast_dim_0;
+    BroadcastDim broadcast_dim_1;
     tt::DataFormat in0_t;
+    tt::DataFormat in1_t;
     tt::DataFormat out0_t;
+    tt::DataFormat out1_t;
 };
 
 // Assume 1Xn tiles.
@@ -120,18 +123,14 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
     return tilized_packed_res;
 }
 
-// TODO : Remove debug code , input vector.
-bool check_is_close(
-    std::vector<bfloat16>& input,
-    std::vector<uint32_t>& packed_golden,
-    std::vector<uint32_t>& device_res,
-    tt::DataFormat T_out) {
+bool check_is_close(std::vector<uint32_t>& packed_golden, std::vector<uint32_t>& device_res, tt::DataFormat T_out) {
     bool result = true;
     if (T_out == tt::DataFormat::Float16_b) {
         result = is_close_packed_vectors<bfloat16, uint32_t>(
             packed_golden, device_res, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.0); });
     } else if (T_out == tt::DataFormat::Bfp8_b) {
-        // TODO: This tolerance is very high. It should be zero for 1.0 to 2.0
+        // Host side may do nearest to even but device side may do nearest rounding, with rounding up
+        // in case of tie. Also need to note packer source format, which may lead to additional rounding.
         float atol = 0.03125f;
         auto gold_refloat = unpack_bfp8_tiles_into_float_vec(packed_golden, true, false);
         auto res_refloat = unpack_bfp8_tiles_into_float_vec(device_res, true, false);
@@ -141,24 +140,14 @@ bool check_is_close(
                 gold_refloat.size(),
                 res_refloat.size());
         }
-        // float max = 0;
         for (int i = 0; i < gold_refloat.size(); i++) {
-            // std::cout << i << " "  <<  gold_refloat[i] << "  " <<  res_refloat[i] << " " <<  input[i].to_float();
-            // max = std::max(max, std::fabs(gold_refloat[i] - res_refloat[i]));
             if (std::fabs(gold_refloat[i] - res_refloat[i]) > atol) {
-                TT_THROW(
-                    "Mismatch  A={} B={} input={} atol={} i={}",
-                    gold_refloat[i],
-                    res_refloat[i],
-                    input[i].to_float(),
-                    atol,
-                    i);
+                TT_THROW("Mismatch  A={} B={} atol={}", gold_refloat[i], res_refloat[i], atol);
                 result = false;
                 break;
             }
         }
     }
-
     return result;
 }
 
@@ -182,7 +171,7 @@ CBHandle CreateCircularBufferHelper(
     return tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
 }
 
-std::vector<bfloat16> get_packed_tilized_input_output_pair(
+void get_packed_tilized_input_output_pair(
     tt::DataFormat in_t,
     tt::DataFormat out_t,
     uint32_t num_tiles,
@@ -192,7 +181,6 @@ std::vector<bfloat16> get_packed_tilized_input_output_pair(
     constexpr uint32_t tile_width = 32;
     constexpr uint32_t tile_height = 32;
     constexpr uint32_t num_single_tile_elem = tile_width * tile_height;
-    std::vector<bfloat16> debug;
     if (in_t == tt::DataFormat::Float16_b) {
         std::vector<bfloat16> input = generate_uniform_random_vector<bfloat16>(
             1.0f, 2.0f, num_tiles * num_single_tile_elem, std::chrono::system_clock::now().time_since_epoch().count());
@@ -202,14 +190,12 @@ std::vector<bfloat16> get_packed_tilized_input_output_pair(
         packed_tilized_input = unit_tests::compute::gold_standard_tilize(packed_input, config);
         packed_tilized_output =
             get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
-        debug = input;
     } else if (in_t == tt::DataFormat::Bfp8_b) {
         packed_tilized_input = create_random_vector_of_bfp8(num_tiles * tile_size(in_t), false, 1, 1.0);
         std::vector<float> input = unpack_bfp8_tiles_into_float_vec(packed_tilized_input, true, false);
         packed_tilized_output =
             get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
     }
-    return debug;
 }
 
 void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroadcastConfig& test_config) {
@@ -222,26 +208,32 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
     constexpr uint32_t block_size = num_tiles / num_blocks;
     tt::DataFormat in0_t = test_config.in0_t;
     tt::DataFormat out0_t = test_config.out0_t;
+    tt::DataFormat in1_t = test_config.in1_t;
+    tt::DataFormat out1_t = test_config.out1_t;
 
     auto src_dram_buffer_0 = CreateDramBuffer(device, in0_t, num_tiles);
     auto dst_dram_buffer_0 = CreateDramBuffer(device, out0_t, num_tiles);
+    auto src_dram_buffer_1 = CreateDramBuffer(device, in1_t, num_tiles);
+    auto dst_dram_buffer_1 = CreateDramBuffer(device, out1_t, num_tiles);
     auto l1_src_cb_0 = CreateCircularBufferHelper(program, core, block_size * 2, in0_t, 0);
     auto l1_dst_cb_0 = CreateCircularBufferHelper(program, core, block_size * 2, out0_t, 16);
+    auto l1_src_cb_1 = CreateCircularBufferHelper(program, core, block_size * 2, in1_t, 1);
+    auto l1_dst_cb_1 = CreateCircularBufferHelper(program, core, block_size * 2, out1_t, 17);
 
-    std::map<string, string> defines = {{"BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim)}};
-
-    log_info("Testing UNARY BCAST_DIM={}", defines["BCAST_DIM"]);
+    std::map<string, string> defines = {
+        {"BCAST_DIM_0", broadcast_dim_to_type.at(test_config.broadcast_dim_0)},
+        {"BCAST_DIM_1", broadcast_dim_to_type.at(test_config.broadcast_dim_1)}};
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        "tt_metal/kernels/dataflow/reader_dual_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_dual_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -258,6 +250,8 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
         core,
         {
             (uint32_t)(src_dram_buffer_0->address()),
+            (uint32_t)0,  // dram bank id
+            (uint32_t)(src_dram_buffer_1->address()),
             (uint32_t)0,          // dram bank id
             (uint32_t)num_tiles,  // num tiles
         });
@@ -268,55 +262,64 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
         core,
         {
             (uint32_t)(dst_dram_buffer_0->address()),
+            (uint32_t)0,  // dram bank id
+            (uint32_t)(dst_dram_buffer_1->address()),
             (uint32_t)0,          // dram bank id
             (uint32_t)num_tiles,  // num tiles
         });
 
     std::vector<uint32_t> packed_tilized_input_0, golden_packed_tilized_output_0;
-    auto debug = get_packed_tilized_input_output_pair(
-        in0_t, out0_t, num_tiles, test_config.broadcast_dim, packed_tilized_input_0, golden_packed_tilized_output_0);
+    get_packed_tilized_input_output_pair(
+        in0_t, out0_t, num_tiles, test_config.broadcast_dim_0, packed_tilized_input_0, golden_packed_tilized_output_0);
     tt_metal::detail::WriteToBuffer(src_dram_buffer_0, packed_tilized_input_0);
+
+    std::vector<uint32_t> packed_tilized_input_1, golden_packed_tilized_output_1;
+    get_packed_tilized_input_output_pair(
+        in1_t, out1_t, num_tiles, test_config.broadcast_dim_1, packed_tilized_input_1, golden_packed_tilized_output_1);
+    tt_metal::detail::WriteToBuffer(src_dram_buffer_1, packed_tilized_input_1);
+
     tt_metal::detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data_0;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer_0, dest_buffer_data_0);
+    std::vector<uint32_t> dest_buffer_data_1;
+    tt_metal::detail::ReadFromBuffer(dst_dram_buffer_1, dest_buffer_data_1);
+
     bool result = check_is_close(debug, golden_packed_tilized_output_0, dest_buffer_data_0, out0_t);
+    result &= check_is_close(debug, golden_packed_tilized_output_1, dest_buffer_data_1, out1_t);
 
     ASSERT_TRUE(result);
 }
 }  // namespace unit_tests::compute::broadcast
 
-class UnaryBroadcastParameterizedDeviceFixture
-    : public DeviceFixture,
-      public testing::WithParamInterface<unit_tests::compute::broadcast::UnaryBroadcastConfig> {};
+using namespace unit_tests::compute::broadcast;
 
-TEST_P(UnaryBroadcastParameterizedDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
+TEST_F(DeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    unit_tests::compute::broadcast::UnaryBroadcastConfig test_config = GetParam();
-    unit_tests::compute::broadcast::run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+
+    for (BroadcastDim bcast_dim : {BroadcastDim::NONE, BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
+        for (tt::DataFormat in0_t_ : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {
+            for (tt::DataFormat out0_t_ : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {
+                UnaryBroadcastConfig test_config = {
+                    .broadcast_dim_0 = bcast_dim,
+                    .broadcast_dim_1 = (BroadcastDim)((bcast_dim + 1) % BroadcastDim::NUM_DIMS),
+                    .in0_t = in0_t_,
+                    .in1_t = (in0_t_ == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b,
+                    .out0_t = out0_t_,
+                    .out1_t = (out0_t_ == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b};
+
+                log_info(
+                    "Testing UNARY BROADCAST BCAST_DIM_0={} in0_t={} out0_t={} | BCAST_DIM_1={} in1_t={}, out1_t={}",
+                    broadcast_dim_to_type.at(test_config.broadcast_dim_0),
+                    test_config.in0_t,
+                    test_config.out0_t,
+                    broadcast_dim_to_type.at(test_config.broadcast_dim_1),
+                    test_config.in1_t,
+                    test_config.out1_t);
+                unit_tests::compute::broadcast::run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+            }
+        }
+    }
 }
-
-using namespace unit_tests::compute::broadcast;
-
-INSTANTIATE_TEST_SUITE_P(
-    ComputeSingleTileUnaryBroadcast,
-    UnaryBroadcastParameterizedDeviceFixture,
-    ::testing::Values(
-        (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
-        (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
-        (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
-        (UnaryBroadcastConfig){BroadcastDim::SCALAR, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
-        (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b},
-        (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b},
-        (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b},
-        (UnaryBroadcastConfig){BroadcastDim::SCALAR, tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b},
-        (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
-        (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
-        (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
-        (UnaryBroadcastConfig){BroadcastDim::SCALAR, tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b},
-        (UnaryBroadcastConfig){BroadcastDim::NONE, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
-        (UnaryBroadcastConfig){BroadcastDim::ROW, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
-        (UnaryBroadcastConfig){BroadcastDim::COL, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
-        (UnaryBroadcastConfig){BroadcastDim::SCALAR, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b}));
