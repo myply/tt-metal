@@ -80,6 +80,7 @@ jobs:
           docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
+            -e LOGURU_LEVEL=INFO
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
