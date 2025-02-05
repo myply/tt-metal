@@ -181,6 +181,7 @@ jobs:
               { echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."; exit 1; }
 
             nice -n 19 $build_command
+            nice -n 19 cmake --build build --target package
 
             echo "Build wheel: ${{ inputs.build-wheel }}"
             if [ "${{ inputs.build-wheel }}" = "true" ]; then
