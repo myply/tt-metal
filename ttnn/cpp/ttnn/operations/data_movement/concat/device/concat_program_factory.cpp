@@ -34,22 +34,34 @@ namespace ttnn::operations::data_movement::detail {
 
 tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
-    TT_FATAL(dim == 3, "Sharded concat TILED only supports dim=3");
-    TT_FATAL(groups == 1 || dim == 3, "Sharded concat RM only supports groups > 1 when dim=3");
-    TT_FATAL(
-        input_tensors.size() == 2 && input_tensors[0].get_padded_shape()[-1] % groups == 0 &&
-            input_tensors[0].get_padded_shape()[-1] % groups == 0,
-        "Input channels must both be evenly divisible by groups");
+    // If we end up here for concat on any other dim we should have taken another path
+    TT_FATAL(dim == 3, "Sharded concat with tiled inputs only supports dim=3");
+    TT_FATAL(input_tensors.size() == 2, "Sharded concat with tiled inputs only supports dim=3");
 
-    // TODO: ASSERT on the fact that we don't support padded on width of shard, C % 32 must be 0
+    // The current implementation relies on not having break up tiles so if we end up padding or
+    // needing to split tiles because of channels < tile width, we cannot proceed.
+    TT_FATAL(
+        input_tensors[0].get_logical_shape()[-1] == input_tensors[0].get_padded_shape()[-1],
+        "Cannot have padding along width dimension in input tensor 0");
+    TT_FATAL(
+        input_tensors[1].get_logical_shape()[-1] == input_tensors[1].get_padded_shape()[-1],
+        "Cannot have padding along width dimension in input tensor 1");
+    TT_FATAL(
+        input_tensors[0].get_padded_shape()[-1] % groups == 0 && input_tensors[0].get_padded_shape()[-1] % groups == 0,
+        "Input channels must both be evenly divisible by groups");
+    TT_FATAL(
+        input_tensors[0].get_padded_shape()[-1] / groups % TILE_WIDTH == 0 &&
+            input_tensors[1].get_padded_shape()[-1] / groups % TILE_WIDTH == 0,
+        "Input channels divided by groups must be a multiple of tile size");
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    auto all_cores = input_tensors[0].shard_spec().value().grid;  // assume all inputs have same grid
+    const auto all_cores = input_tensors[0].shard_spec().value().grid;  // assume all inputs have same grid
 
     const auto get_num_tiles_per_shard =
         [](const std::array<uint32_t, 2>& shard_shape) -> std::tuple<uint32_t, uint32_t> {
-        // TODO: ASSERT the shard height is mutliple of 32, tensor height does not need to be
+        TT_FATAL(shard_shape[0] % TILE_HEIGHT == 0, "Shard width must align to tile height");
+        TT_FATAL(shard_shape[1] % TILE_WIDTH == 0, "Shard width must align to tile width");
         const uint32_t num_tiles_along_height = shard_shape[0] / TILE_HEIGHT;
         const uint32_t num_tiles_along_width = shard_shape[1] / TILE_WIDTH;
         TT_FATAL(num_tiles_along_height != 0 && num_tiles_along_width != 0, "Expected tensor to have at least 1 tiles");
@@ -66,8 +78,8 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     }
     const auto num_tiles_for_output_shard = get_num_tiles_per_shard(output.shard_spec()->shape);
 
-    log_info("Number of tiles per input tensor shard: {}", num_tiles_for_each_input_shard);
-    log_info("Number of tiles for output tensor shard: {}", num_tiles_for_output_shard);
+    log_debug("Number of tiles per input tensor shard: {}", num_tiles_for_each_input_shard);
+    log_debug("Number of tiles for output tensor shard: {}", num_tiles_for_output_shard);
 
     const auto create_circular_buffer = [&program, &cores = all_cores](
                                             uint32_t index,
@@ -75,7 +87,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
                                             uint32_t tile_size,
                                             const tt::DataFormat& format,
                                             Buffer* buffer) -> tt::tt_metal::CBHandle {
-        tt::log_info(
+        tt::log_debug(
             "Creating CB (id={}) for {} tiles (each {} B) with total size {} B",
             index,
             num_tiles,
@@ -96,7 +108,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         return create_circular_buffer(idx, total_num_tiles, tile_size, data_format, input_tensor.buffer());
     };
 
-    // TODO: ASSERT SAME INPUT DTYPE
+    TT_FATAL(input_tensors.at(0).dtype() == input_tensors.at(1).dtype(), "Input tensor data types must match");
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
     const auto tile_size = tt::tt_metal::detail::TileSize(data_format);
 
@@ -110,22 +122,22 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
 
     const uint32_t cb_output_id = cb_inputs.size();
     const auto total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_output_shard);
-    CBHandle cb_output = create_cb_from_tensor(cb_output_id, output, total_num_tiles);
+    const CBHandle cb_output = create_cb_from_tensor(cb_output_id, output, total_num_tiles);
 
     const bool is_rm_shard_orientation = output.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_shard_orientation);
 
-    // TODO: Handle case where the final shard has padding (i.e. shard_dim * num_cores != tensor_dim)
     for (const auto& core : cores) {
         std::vector<uint32_t> compile_time_args_0 = {
             0,
             1,
-            2,
+            cb_output_id,
             std::get<0>(num_tiles_for_each_input_shard[0]),
             std::get<1>(num_tiles_for_each_input_shard[0]),
             std::get<0>(num_tiles_for_each_input_shard[1]),
             std::get<1>(num_tiles_for_each_input_shard[1]),
             tile_size,
+            groups,
         };
         tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
             program,

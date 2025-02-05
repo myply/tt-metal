@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t input1_num_tiles_height = get_compile_time_arg_val(5);
     constexpr uint32_t input1_num_tiles_width = get_compile_time_arg_val(6);
     constexpr uint32_t tile_size = get_compile_time_arg_val(7);
-    constexpr uint32_t groups = 2;  // get_compile_time_arg_val(8);
+    constexpr uint32_t groups = get_compile_time_arg_val(8);
 
     constexpr uint32_t input0_stride = tile_size * input0_num_tiles_width / groups;
     constexpr uint32_t input1_stride = tile_size * input1_num_tiles_width / groups;
