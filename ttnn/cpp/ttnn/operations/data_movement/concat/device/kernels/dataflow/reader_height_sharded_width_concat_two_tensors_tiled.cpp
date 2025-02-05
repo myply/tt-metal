@@ -26,21 +26,29 @@ void kernel_main() {
     uint32_t l1_write_addr = base_l1_write_addr;
     uint32_t l1_read_addr = base_l1_read_addr_0;
     noc_async_read_one_packet_set_state(noc_addr_0, tile_size);
-    for (uint32_t idx = 0; idx < input0_num_tiles_width; idx++) {
-        DPRINT << "reading from " << l1_read_addr << " and writing to " << l1_write_addr << ENDL();
-        noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
-        l1_read_addr += tile_size;
-        l1_write_addr += tile_size;
+    for (uint32_t i = 0; i < input0_num_tiles_height; i++) {
+        for (uint32_t j = 0; j < input0_num_tiles_width; j++) {
+            DPRINT << "reading from " << l1_read_addr << " and writing to " << l1_write_addr << ENDL();
+            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            l1_read_addr += tile_size;
+            l1_write_addr += tile_size;
+        }
+        // advance to next row by passing input1 tiles
+        l1_write_addr += input1_num_tiles_width * tile_size;
     }
 
     l1_write_addr = base_l1_write_addr + input0_num_tiles_width * tile_size;  // move pointer to end of first input
     l1_read_addr = base_l1_read_addr_1;
     noc_async_read_one_packet_set_state(noc_addr_1, tile_size);
-    for (uint32_t idx = 0; idx < input1_num_tiles_width; idx++) {
-        DPRINT << "reading from " << l1_read_addr << " and writing to " << l1_write_addr << ENDL();
-        noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
-        l1_read_addr += tile_size;
-        l1_write_addr += tile_size;
+    for (uint32_t i = 0; i < input1_num_tiles_height; i++) {
+        for (uint32_t j = 0; j < input1_num_tiles_width; j++) {
+            DPRINT << "reading from " << l1_read_addr << " and writing to " << l1_write_addr << ENDL();
+            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            l1_read_addr += tile_size;
+            l1_write_addr += tile_size;
+        }
+        // advance to next row by passing input0 tiles
+        l1_write_addr += input0_num_tiles_width * tile_size;
     }
 
     noc_async_read_barrier();
