@@ -13,7 +13,7 @@ void kernel_main() {
     constexpr uint32_t input0_num_tiles_width = get_compile_time_arg_val(4);
     constexpr uint32_t input1_num_tiles_height = get_compile_time_arg_val(5);
     constexpr uint32_t input1_num_tiles_width = get_compile_time_arg_val(6);
-    constexpr uint32_t tile_size = 2048;  // Make argument
+    constexpr uint32_t tile_size = get_compile_time_arg_val(7);
 
     const uint32_t base_l1_read_addr_0 = get_read_ptr(input0_cb);
     const uint64_t noc_addr_0 = get_noc_addr(base_l1_read_addr_0);
