@@ -106,6 +106,8 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
                 tempfp32v[i] = vBroadcast[i].to_float();
             }
             tilized_packed_res = pack_fp32_vec_as_bfp8_tiles(tempfp32v, true, false);
+        } else {
+            TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
     } else if constexpr (std::is_same<float, T_in>::value) {
         if (T_out == tt::DataFormat::Float16_b) {
@@ -118,6 +120,8 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             tilized_packed_res = unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
             tilized_packed_res = pack_fp32_vec_as_bfp8_tiles(vBroadcast, true, false);
+        } else {
+            TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
     }
     return tilized_packed_res;
@@ -147,7 +151,10 @@ bool check_is_close(std::vector<uint32_t>& packed_golden, std::vector<uint32_t>&
                 break;
             }
         }
+    } else {
+        TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
     }
+
     return result;
 }
 
@@ -311,7 +318,7 @@ TEST_F(DeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
                     .out1_t = (out0_t_ == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b};
 
                 log_info(
-                    "Testing UNARY BROADCAST BCAST_DIM_0={} in0_t={} out0_t={} | BCAST_DIM_1={} in1_t={}, out1_t={}",
+                    "Testing UNARY BROADCAST BCAST_DIM_0={} in0_t={} out0_t={} | BCAST_DIM_1={} in1_t={} out1_t={}",
                     broadcast_dim_to_type.at(test_config.broadcast_dim_0),
                     test_config.in0_t,
                     test_config.out0_t,
