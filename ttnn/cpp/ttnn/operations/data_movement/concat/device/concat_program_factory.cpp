@@ -34,7 +34,6 @@ namespace ttnn::operations::data_movement::detail {
 
 tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
-    tt::log_info("RUNNING TILED 2 TENSOR CONCAT!");
     TT_FATAL(dim == 3, "Sharded concat TILED only supports dim=3");
     TT_FATAL(groups == 1 || dim == 3, "Sharded concat RM only supports groups > 1 when dim=3");
     TT_FATAL(
@@ -46,55 +45,72 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const uint32_t num_input_tensors = 2;  // this is always the case in this fn
-    std::vector<CBHandle> cb_inputs(num_input_tensors);
-
     auto all_cores = input_tensors[0].shard_spec().value().grid;  // assume all inputs have same grid
+
+    const auto get_num_tiles = [](const std::array<uint32_t, 2>& shard_shape) -> std::tuple<uint32_t, uint32_t> {
+        // TODO: ASSERT NO PADDING or else invalid
+        const uint32_t num_tiles_along_height = (shard_shape[0] / TILE_HEIGHT);
+        const uint32_t num_tiles_along_width = (shard_shape[1] / TILE_WIDTH);
+        return {num_tiles_along_height, num_tiles_along_width};
+    };
+
+    const auto get_total_num_tiles = [](const std::tuple<uint32_t, uint32_t>& num_tiles) -> uint32_t {
+        return std::get<0>(num_tiles) * std::get<1>(num_tiles);
+    };
+
+    std::vector<std::tuple<uint32_t, uint32_t>> num_tiles_for_each_input;
+    for (const auto& input_tensor : input_tensors) {
+        num_tiles_for_each_input.push_back(get_num_tiles(input_tensor.shard_spec()->shape));
+    }
+    const auto num_tiles_for_output = get_num_tiles(output.shard_spec()->shape);
 
     const auto create_circular_buffer = [&program, &cores = all_cores](
                                             uint32_t index,
                                             uint32_t num_tiles,
                                             uint32_t tile_size,
                                             const tt::DataFormat& format,
-                                            Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
-        tt::log_info(
-            "Creating CB (id={}) with {} tile(s) ({} B each, total size {} B)",
+                                            Buffer* buffer) -> tt::tt_metal::CBHandle {
+        tt::tt_metal::CircularBufferConfig config =
+            tt::tt_metal::CircularBufferConfig(num_tiles * tile_size, {{index, format}})
+                .set_page_size(index, tile_size)
+                .set_globally_allocated_address(*buffer);
+    tt:
+        log_info(
+            "Creating CB (id={}) for {} tiles (each {} B) with total size {} B",
             index,
             num_tiles,
             tile_size,
-            tile_size * num_tiles);
-        tt::tt_metal::CircularBufferConfig config =
-            tt::tt_metal::CircularBufferConfig(num_tiles * tile_size, {{index, format}})
-                .set_page_size(index, tile_size);
-        if (buffer) {
-            config.set_globally_allocated_address(*buffer);
-        }
+            num_tiles * tile_size);
         return tt::tt_metal::CreateCircularBuffer(program, cores, config);
     };
 
-    // TODO: ASSERT SAME INPUT DTYPE
-    //
-
-    for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
-        const auto& input_tensor = input_tensors.at(idx);
-        const auto shard_shape = input_tensor.shard_spec()->shape;
-        // TODO: ASSERT NO PADDING or else invalid
-        const auto num_tiles = (shard_shape[0] / TILE_HEIGHT) * (shard_shape[1] / TILE_HEIGHT);
+    const auto create_cb_from_tensor =
+        [&create_circular_buffer](
+            uint32_t idx, const Tensor& input_tensor, uint32_t total_num_tiles) -> tt::tt_metal::CBHandle {
         const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
         const auto tile_size = tt::tt_metal::detail::TileSize(data_format);
-        cb_inputs[idx] = create_circular_buffer(idx, num_tiles, tile_size, data_format, input_tensor.buffer());
+        return create_circular_buffer(idx, total_num_tiles, tile_size, data_format, input_tensor.buffer());
+    };
+
+    // TODO: ASSERT SAME INPUT DTYPE
+
+    const uint32_t num_input_tensors = input_tensors.size();
+    std::vector<CBHandle> cb_inputs(num_input_tensors);
+    for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
+        const auto& input_tensor = input_tensors.at(idx);
+        const auto total_num_tiles = get_total_num_tiles(num_tiles_for_each_input[idx]);
+        cb_inputs[idx] = create_cb_from_tensor(idx, input_tensor, total_num_tiles);
     }
 
-    const auto shard_shape = output.shard_spec()->shape;
-    const auto num_output_tiles = (shard_shape[0] / TILE_HEIGHT) * (shard_shape[1] / TILE_HEIGHT);
-    const auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
-    const auto output_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
     const uint32_t cb_output_id = cb_inputs.size();
-    CBHandle cb_output =
-        create_circular_buffer(cb_output_id, num_output_tiles, output_tile_size, output_data_format, output.buffer());
+    const auto total_num_tiles = get_total_num_tiles(num_tiles_for_output);
+    CBHandle cb_output = create_cb_from_tensor(cb_output_id, output, total_num_tiles);
 
     const bool is_rm_shard_orientation = output.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_shard_orientation);
+
+    log_info("Number of tiles per input tensor: {}", num_tiles_for_each_input);
+    log_info("Number of tiles for output tensor: {}", num_tiles_for_output);
 
     // TODO: Handle case where the final shard has padding (i.e. shard_dim * num_cores != tensor_dim)
     for (const auto& core : cores) {
@@ -102,6 +118,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
             0,
             1,
             2,
+            std::get<0>(num_tiles_for_each_input[0]),
+            std::get<1>(num_tiles_for_each_input[0]),
+            std::get<0>(num_tiles_for_each_input[1]),
+            std::get<1>(num_tiles_for_each_input[1]),
         };
         tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -118,16 +138,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
         for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
-            tt::log_info("Updating {}", idx);
             UpdateDynamicCircularBufferAddress(program, cb_inputs[idx], *input_tensors[idx].buffer());
-            tt::log_info("Done Updating {}", idx);
         }
-        tt::log_info("Updating output");
         UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
-        tt::log_info("DONE!");
     };
-
-    tt::log_info("Returning program");
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
