@@ -12,6 +12,20 @@ name: PR Gate
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - afuller/tests-shift-left
+
+  workflow_call:
+    # Map the workflow outputs to job outputs
+    outputs:
+      docker-image.ci-build.tag:
+        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+        value: ${{ jobs.build.outputs.ci-build-tag }}
+      docker-image.ci-test.tag:
+        description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
+        value: ${{ jobs.build.outputs.ci-test-tag }}
+
   pull_request:
     types:
       - opened
@@ -21,20 +35,78 @@ on:
     branches:
       - "main"
 
-concurrency:
-  # Use github.run_id on main branch (or any protected branch)
-  # This ensure that no runs get cancelled on main
-  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
-  # and will cancel obsolete runs
-  # Use github.ref on other branches, so it's unique per branch
-  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
-  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+#concurrency:
+#  # Use github.run_id on main branch (or any protected branch)
+#  # This ensure that no runs get cancelled on main
+#  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
+#  # and will cancel obsolete runs
+#  # Use github.ref on other branches, so it's unique per branch
+#  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
+#  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
+#  # group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}
+#  # cancel-in-progress: true
 
 jobs:
-  build-artifact:
+  build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
     with:
       version: "22.04"
+
+  metal-tests:
+    needs: build
+    runs-on:
+      - in-service
+      - cloud-virtual-machine
+      - BH
+    container:
+      image: ${{ needs.build.outputs.docker-image-ci-build-tag }}
+      env:
+        ENV_VAR: foo
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: workaround
+        run: |
+          # The test-reporting action needs this set, and we can't seem to opt out of it.
+          git config --global --add safe.directory /__w/tt-metal/tt-metal
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: /work/pkgs/
+      - name: Install packages
+        run: |
+          apt install ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb
+
+      - name: Run a test
+        env:
+          GTEST_COLOR: yes
+          GTEST_OUTPUT: xml:/work/test-reports/
+
+          # TODO: Need to get away from env vars!
+          TT_METAL_HOME: /usr/libexec/tt-metalium
+        run: |
+          /usr/libexec/tt-metalium/validation/unit_tests_llk
+          /usr/libexec/tt-metalium/validation/unit_tests_stl
+
+      - name: Test Report
+        uses: phoenix-actions/test-reporting@v15
+        if: success() || failure()
+        with:
+          name: Foo Tests
+          path: /work/test-reports/*.xml
+          reporter: jest-junit
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # Due to https://github.com/actions/runner/issues/691 and other outstanding issues, we are
+          # forced to pollute the host directory with root:root files.  Clean up to not harm the next job.
+          rm -rf /__w/tt-metal/tt-metal/deleteme
+          rm -rf /__w/tt-metal/tt-metal/docker-job
