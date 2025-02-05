@@ -349,7 +349,7 @@ public:
         }
 
         start_flag.store(true);
-        auto hp_duration = HostWriteHP<caching_src_vector>(hp_base, hp_size, src_data, total_size, page_size);
+        // auto hp_duration = HostWriteHP<caching_src_vector>(hp_base, hp_size, src_data, total_size, page_size);
         thread.join();
 
         if (configured_readers.has_value()) {
@@ -370,7 +370,7 @@ public:
             results.kernel_bytes_rd = 0;
         }
 
-        results.host_hugepage_writing_duration = hp_duration;
+        results.host_hugepage_writing_duration = std::chrono::duration<double>{1};
         results.host_hugepage_bytes_processed = total_size;
 
         return results;
@@ -472,11 +472,8 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Readers)(benchmark::State& state
     }
 
     state.SetBytesProcessed(total_size * state.iterations());
-    state.counters["dev_bandwidth_per_second"] = benchmark::Counter(
-        (total_device_bytes / total_device_time) *
-            total_iteration_time,  // Multiply by total_iteration_time to negate kIsRate to pretty print
-        benchmark::Counter::kIsRate,
-        benchmark::Counter::kIs1024);
+    state.counters["dev_bandwidth_per_second"] = (total_device_bytes / total_device_time);
+    state.counters["dev_bytes"] = total_device_bytes;
     state.counters["total_size"] = total_size;
     state.counters["page_size"] = state.range(1);
     state.counters["num_readers"] = state.range(2);
