@@ -41,32 +41,33 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
             input_tensors[0].get_padded_shape()[-1] % groups == 0,
         "Input channels must both be evenly divisible by groups");
 
-    // TODO: ASSERT on the fact that we don't support padded shard, HW % cores must be 0
+    // TODO: ASSERT on the fact that we don't support padded on width of shard, C % 32 must be 0
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     auto all_cores = input_tensors[0].shard_spec().value().grid;  // assume all inputs have same grid
 
-    const auto get_num_tiles = [](const std::array<uint32_t, 2>& shard_shape) -> std::tuple<uint32_t, uint32_t> {
-        // TODO: ASSERT NO PADDING or else invalid
-        const uint32_t num_tiles_along_height = (shard_shape[0] / TILE_HEIGHT);
-        const uint32_t num_tiles_along_width = (shard_shape[1] / TILE_WIDTH);
+    const auto get_num_tiles_per_shard =
+        [](const std::array<uint32_t, 2>& shard_shape) -> std::tuple<uint32_t, uint32_t> {
+        // TODO: ASSERT the shard height is mutliple of 32, tensor height does not need to be
+        const uint32_t num_tiles_along_height = shard_shape[0] / TILE_HEIGHT;
+        const uint32_t num_tiles_along_width = shard_shape[1] / TILE_WIDTH;
         TT_FATAL(num_tiles_along_height != 0 && num_tiles_along_width != 0, "Expected tensor to have at least 1 tiles");
         return {num_tiles_along_height, num_tiles_along_width};
     };
 
-    const auto get_total_num_tiles = [](const std::tuple<uint32_t, uint32_t>& num_tiles) -> uint32_t {
+    const auto get_total_num_tiles_per_shard = [](const std::tuple<uint32_t, uint32_t>& num_tiles) -> uint32_t {
         return std::get<0>(num_tiles) * std::get<1>(num_tiles);
     };
 
-    std::vector<std::tuple<uint32_t, uint32_t>> num_tiles_for_each_input;
+    std::vector<std::tuple<uint32_t, uint32_t>> num_tiles_for_each_input_shard;
     for (const auto& input_tensor : input_tensors) {
-        num_tiles_for_each_input.push_back(get_num_tiles(input_tensor.shard_spec()->shape));
+        num_tiles_for_each_input_shard.push_back(get_num_tiles_per_shard(input_tensor.shard_spec()->shape));
     }
-    const auto num_tiles_for_output = get_num_tiles(output.shard_spec()->shape);
+    const auto num_tiles_for_output_shard = get_num_tiles_per_shard(output.shard_spec()->shape);
 
-    log_info("Number of tiles per input tensor: {}", num_tiles_for_each_input);
-    log_info("Number of tiles for output tensor: {}", num_tiles_for_output);
+    log_info("Number of tiles per input tensor shard: {}", num_tiles_for_each_input_shard);
+    log_info("Number of tiles for output tensor shard: {}", num_tiles_for_output_shard);
 
     const auto create_circular_buffer = [&program, &cores = all_cores](
                                             uint32_t index,
@@ -103,12 +104,12 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     std::vector<CBHandle> cb_inputs(num_input_tensors);
     for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
         const auto& input_tensor = input_tensors.at(idx);
-        const auto total_num_tiles = get_total_num_tiles(num_tiles_for_each_input[idx]);
+        const auto total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_each_input_shard[idx]);
         cb_inputs[idx] = create_cb_from_tensor(idx, input_tensor, total_num_tiles);
     }
 
     const uint32_t cb_output_id = cb_inputs.size();
-    const auto total_num_tiles = get_total_num_tiles(num_tiles_for_output);
+    const auto total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_output_shard);
     CBHandle cb_output = create_cb_from_tensor(cb_output_id, output, total_num_tiles);
 
     const bool is_rm_shard_orientation = output.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
@@ -120,10 +121,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
             0,
             1,
             2,
-            std::get<0>(num_tiles_for_each_input[0]),
-            std::get<1>(num_tiles_for_each_input[0]),
-            std::get<0>(num_tiles_for_each_input[1]),
-            std::get<1>(num_tiles_for_each_input[1]),
+            std::get<0>(num_tiles_for_each_input_shard[0]),
+            std::get<1>(num_tiles_for_each_input_shard[0]),
+            std::get<0>(num_tiles_for_each_input_shard[1]),
+            std::get<1>(num_tiles_for_each_input_shard[1]),
             tile_size,
         };
         tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
