@@ -22,7 +22,7 @@ def get_expected_times(functional_whisper):
     }[functional_whisper]
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Not tested on single WH")
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Not tested on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])
@@ -43,11 +43,13 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
     config = WhisperConfig.from_pretrained(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-    inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
+    inputs = feature_extractor(ds[4]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
     decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
 
     attention_mask = None
+
+    breakpoint()
 
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
@@ -77,6 +79,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
             parameters=parameters,
         )
         tt_output = ttnn.to_torch(tt_output)
+        breakpoint()
         end = time.time()
 
         duration = end - start

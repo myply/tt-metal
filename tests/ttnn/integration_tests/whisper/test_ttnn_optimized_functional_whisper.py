@@ -6,7 +6,7 @@ import pytest
 from models.experimental.functional_whisper.reference import torch_functional_whisper
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
 import transformers
-from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
+from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig, WhisperForConditionalGeneration
 from datasets import load_dataset
 import torch
 import ttnn
@@ -18,7 +18,7 @@ from models.utility_functions import is_wormhole_b0, is_blackhole
 MODEL_NAME = "openai/whisper-base"
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -79,10 +79,11 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
     )
 
     output = ttnn.to_torch(output)
-    assert_with_pcc(torch_output, output, 0.98)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output, output, 0.98)
+    print(f"PCC passed: {pcc_passed}, PCC message: {pcc_message}")
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -116,10 +117,11 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     output = ttnn_model.encoder_layer(config, ttnn_hidden_states, parameters=ttnn_parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.99)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output, output, pcc=0.99)
+    print(f"PCC passed: {pcc_passed}, PCC message: {pcc_message}")
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -169,10 +171,11 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
     output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.968)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output, output, 0.968)
+    print(f"PCC passed: {pcc_passed}, PCC message: {pcc_message}")
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -226,10 +229,11 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.97)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output, output, 0.97)
+    print(f"PCC passed: {pcc_passed}, PCC message: {pcc_message}")
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -298,25 +302,34 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.99)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output, output, pcc=0.99)
+    print(f"PCC passed: {pcc_passed}, PCC message: {pcc_message}")
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.requires_fast_runtime_mode_off
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+# @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 def test_ttnn_whisper(tmp_path, device, ttnn_model):
     torch.manual_seed(0)
-    model_name = "openai/whisper-base"
+    model_name = "openai/whisper-base.en"
     config = WhisperConfig.from_pretrained(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-    inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
+    inputs = feature_extractor(ds[4]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
     decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
 
     attention_mask = None
 
     model = WhisperModel.from_pretrained(model_name).eval()
+
+    hf_reference_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en")
+    linear_weight = hf_reference_model.proj_out.weight
+
+    linear_weight = hf_reference_model.proj_out.weight
+    ttnn_linear_weight = ttnn.from_torch(linear_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    ttnn_linear_weight = ttnn.permute(ttnn_linear_weight, (1, 0))
+    ttnn_linear_weight = ttnn.to_layout(ttnn_linear_weight, layout=ttnn.TILE_LAYOUT)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -339,6 +352,8 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model):
         parameters=parameters,
     )
 
+    expected_output = expected_last_hidden_state @ linear_weight.T
+
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
@@ -346,24 +361,33 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model):
         device=device,
     )
 
-    with ttnn.tracer.trace():
-        (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
-            config=config,
-            input_features=input_features,
-            input_ids=decoder_input_ids,
-            attention_mask=attention_mask,
-            parameters=ttnn_parameters,
-            device=device,
-        )
+    # with ttnn.tracer.trace():
+    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+        config=config,
+        input_features=input_features,
+        input_ids=decoder_input_ids,
+        attention_mask=attention_mask,
+        parameters=ttnn_parameters,
+        device=device,
+    )
 
-        last_hidden_state = ttnn_model.whisper(
-            config,
-            input_embeds,
-            decoder_hidden_states,
-            decoder_attention_mask=decoder_attention_mask,
-            parameters=ttnn_parameters,
-        )
-        last_hidden_state = ttnn.to_torch(last_hidden_state)
-    ttnn.tracer.visualize(last_hidden_state, file_name=tmp_path / "whisper.svg")
+    last_hidden_state = ttnn_model.whisper(
+        config,
+        input_embeds,
+        decoder_hidden_states,
+        decoder_attention_mask=decoder_attention_mask,
+        parameters=ttnn_parameters,
+    )
+    # output = last_hidden_state @ ttnn_linear_weight
+    breakpoint()
+    output = ttnn.linear(last_hidden_state, ttnn_linear_weight)
 
-    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.964)
+    last_hidden_state = ttnn.to_torch(last_hidden_state)
+    output = ttnn.to_torch(output)
+
+    # ttnn.tracer.visualize(last_hidden_state, file_name=tmp_path / "whisper.svg")
+
+    pcc_passed, pcc_message = assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.964)
+    print(f"hidden state PCC passed: {pcc_passed}, PCC message: {pcc_message}")
+    pcc_passed, pcc_message = assert_with_pcc(expected_output, output, 0.964)
+    print(f"output PCC passed: {pcc_passed}, PCC message: {pcc_message}")

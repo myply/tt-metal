@@ -20,6 +20,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
 )
 from models.experimental.functional_whisper.tt import ttnn_functional_whisper, ttnn_optimized_functional_whisper
+from models.experimental.functional_whisper.reference import torch_functional_whisper
 from models.generation_utils import get_logits_processor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -30,6 +31,8 @@ from os.path import isfile, join
 
 from transformers import AutoFeatureExtractor, WhisperForAudioClassification
 from datasets import load_dataset
+
+import time
 
 
 def load_input_paths(folder_path):
@@ -63,6 +66,7 @@ def run_generate(
     ttnn_linear_weight,
     device,
     generation_config,
+    use_torch=False,
 ):
     input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
 
@@ -72,7 +76,13 @@ def run_generate(
 
     decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
 
-    for i in range(32):
+    for i in range(150):
+        if i == 1:
+            start = time.time()
+
+        start_iter = time.time()
+
+        start_fwd = time.time()
         output = ttnn_model.whisper(
             config,
             input_embeds,
@@ -80,29 +90,57 @@ def run_generate(
             decoder_attention_mask=decoder_attention_mask,
             parameters=parameters,
         )
-        output = output @ ttnn_linear_weight
 
-        output = ttnn.from_device(output)
+        if not use_torch:
+            output = output @ ttnn_linear_weight
+            output = ttnn.from_device(output)
 
-        logits_to_torch = ttnn.to_torch(output)
+            logits_to_torch = ttnn.to_torch(output)
+        else:
+            output = output @ ttnn_linear_weight.T.bfloat16()
+            logits_to_torch = output
+        end_fwd = time.time()
+
+        start_postprocess = time.time()
 
         next_token_logits = logits_to_torch[:, i, :]
 
         next_tokens_scores = logits_processor(input_features, next_token_logits)
         next_tokens = torch.argmax(next_tokens_scores, dim=-1)
 
+        end_postprocess = time.time()
+
+        start_preprocess = time.time()
         if (i + 1) % 32 == 0:
             input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
 
         input_ids[:, i + 1] = next_tokens[:, None]
 
-        decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
-            config=config, input_ids=input_ids, attention_mask=None, parameters=parameters.decoder, device=device
-        )
+        if not use_torch:
+            decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
+                config=config, input_ids=input_ids, attention_mask=None, parameters=parameters.decoder, device=device
+            )
+        else:
+            decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
+                input_ids=input_ids, attention_mask=None, parameters=parameters.decoder
+            )
+        end_preprocess = time.time()
+
+        end_iter = time.time()
+        # logger.info(f"Time taken for iteration {i+1}: {end_iter - start_iter}")
+        if i >= 1:
+            logger.info(f"time taken for inference in iteration {i+1}: {end_iter - start}")
 
         if next_tokens == config.eos_token_id:
             break
-        logger.info(processor.batch_decode(input_ids, skip_special_tokens=True)[0])
+        # logger.info(processor.batch_decode(input_ids, skip_special_tokens=True)[0])
+
+    end = time.time()
+    logger.info(f"Num output tokens: {i+1}")
+    logger.info(f"Time taken for inference: {end - start}")
+    logger.info(f"Time taken for forward pass: {end_fwd - start_fwd}")
+    logger.info(f"Time taken for preprocess: {end_preprocess - start_preprocess}")
+    logger.info(f"Time taken for postprocess: {end_postprocess - start_postprocess}")
 
     ttnn_transcription = processor.batch_decode(input_ids, skip_special_tokens=True)[0]
 
@@ -167,12 +205,12 @@ def run_demo_functional_whisper_for_audio_classification_inference(input_path, t
 def run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
     torch.manual_seed(0)
 
-    model = WhisperModel.from_pretrained("openai/whisper-tiny.en").to(torch.bfloat16).eval()
+    model = WhisperModel.from_pretrained("openai/whisper-base.en").to(torch.bfloat16).eval()
 
-    config = WhisperConfig.from_pretrained("openai/whisper-tiny.en")
+    config = WhisperConfig.from_pretrained("openai/whisper-base.en")
 
-    processor = AutoProcessor.from_pretrained("openai/whisper-tiny.en", language="English", task="transcribe")
-    hf_reference_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
+    processor = AutoProcessor.from_pretrained("openai/whisper-base.en", language="English", task="transcribe")
+    hf_reference_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en")
     linear_weight = hf_reference_model.proj_out.weight
 
     linear_weight = hf_reference_model.proj_out.weight
@@ -180,7 +218,7 @@ def run_demo_functional_whisper_for_conditional_generation_inference(input_path,
     ttnn_linear_weight = ttnn.permute(ttnn_linear_weight, (1, 0))
     ttnn_linear_weight = ttnn.to_layout(ttnn_linear_weight, layout=ttnn.TILE_LAYOUT)
 
-    feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-tiny.en")
+    feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-base.en")
     input_data = load_input_paths(input_path)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -290,12 +328,12 @@ def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, dev
 def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device):
     torch.manual_seed(0)
 
-    model = WhisperModel.from_pretrained("openai/whisper-tiny.en").to(torch.bfloat16).eval()
+    model = WhisperModel.from_pretrained("openai/whisper-base.en").to(torch.bfloat16).eval()
 
-    config = WhisperConfig.from_pretrained("openai/whisper-tiny.en")
+    config = WhisperConfig.from_pretrained("openai/whisper-base.en")
 
-    processor = AutoProcessor.from_pretrained("openai/whisper-tiny.en", language="English", task="transcribe")
-    hf_reference_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
+    processor = AutoProcessor.from_pretrained("openai/whisper-base.en", language="English", task="transcribe")
+    hf_reference_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en")
     linear_weight = hf_reference_model.proj_out.weight
 
     linear_weight = hf_reference_model.proj_out.weight
@@ -303,9 +341,9 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
     ttnn_linear_weight = ttnn.permute(ttnn_linear_weight, (1, 0))
     ttnn_linear_weight = ttnn.to_layout(ttnn_linear_weight, layout=ttnn.TILE_LAYOUT)
 
-    feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-tiny.en")
+    feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-base.en")
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-    inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
+    inputs = feature_extractor(ds[4]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     dtype_to_use = torch.bfloat16
     input_features = inputs.input_features.type(dtype_to_use)
 
@@ -314,35 +352,52 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
 
     attention_mask = None
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
-    )
+    USE_TORCH = False
 
-    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
-        config=config,
-        input_features=input_features,
-        input_ids=decoder_input_ids,
-        attention_mask=attention_mask,
-        parameters=parameters,
-        device=device,
-    )
+    if not USE_TORCH:
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: model,
+            convert_to_ttnn=ttnn_model.convert_to_ttnn,
+            custom_preprocessor=ttnn_model.custom_preprocessor,
+            device=device,
+        )
+
+        (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+            config=config,
+            input_features=input_features,
+            input_ids=decoder_input_ids,
+            attention_mask=attention_mask,
+            parameters=parameters,
+            device=device,
+        )
+    else:
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: model,
+            convert_to_ttnn=lambda *_: False,
+            custom_preprocessor=torch_functional_whisper.custom_preprocessor,
+        )
+
+        (input_embeds, decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_inputs(
+            input_features=input_features,
+            input_ids=decoder_input_ids,
+            attention_mask=attention_mask,
+            parameters=parameters,
+        )
 
     generation_config = hf_reference_model.generation_config
     ttnn_output = run_generate(
         config,
         input_embeds,
         input_features,
-        ttnn_model,
+        ttnn_model if not USE_TORCH else torch_functional_whisper,
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         parameters=parameters,
         processor=processor,
-        ttnn_linear_weight=ttnn_linear_weight,
+        ttnn_linear_weight=ttnn_linear_weight if not USE_TORCH else linear_weight,
         device=device,
         generation_config=generation_config,
+        use_torch=USE_TORCH,
     )
     logger.info("Model Output")
     logger.info(ttnn_output)
