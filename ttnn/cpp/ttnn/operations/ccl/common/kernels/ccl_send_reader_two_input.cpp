@@ -163,7 +163,7 @@ template <
     tt::tt_metal::TensorMemoryLayout tensor_layout,
     tt::tt_metal::BufferType buffer_type,
     tt::tt_metal::Layout page_layout>
-FORCE_INLINE auto build_source_address_generator(
+auto build_source_address_generator(
     std::size_t& arg_idx,
     address_t tensor_address,
     std::size_t page_size,
@@ -324,7 +324,7 @@ struct command_context_t final {
 
     FORCE_INLINE bool current_command_active() const { return populated; }
 
-    FORCE_INLINE void fetch_next_command() {
+    void fetch_next_command() {
         populated = true;
 
         this->current_cmd_header = ttnn::ccl::cmd::CclCommandHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
@@ -517,7 +517,7 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
                     cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
             } break;
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
-                is_remote_atomic_inc_over_fabric = true;
+                do_local_write = true;
                 const auto& mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
                 if (cmd_ctx.fabric_connection.has_forward_connection()) {
                     auto &connection = cmd_ctx.fabric_connection.get_forward_connection();
