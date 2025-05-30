@@ -18,10 +18,12 @@
 
 #include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
-
+// #include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 namespace NAMESPACE {
 
 void MAIN {
+    DeviceZoneScopedN("SDPA-DECODE");
     constexpr uint32_t St = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(2);
@@ -174,7 +176,8 @@ void MAIN {
             cb_out_o,
             cb_out_m,
             cb_out_l>(k_chunk_start, k_chunk_end, do_reduce, apply_mask_at_last_chunk);
-
+        uint32_t uint32_do_reduce = do_reduce;    
+        DPRINT << "1 do_reduce: " <<uint32_do_reduce<<ENDL();
         // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
             // cb_out_accumulate_im should contain o_1
@@ -183,13 +186,14 @@ void MAIN {
             if (k_chunk_end - k_chunk_start < k_num_chunks) {
                 // This indicates that there are computes done by other workers. Needs to wait for them and send to
                 // reducer's compute
+                // DPRINT << "2 start num_cores_to_wait: " <<num_cores_to_wait<<ENDL();
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
                     // reconfig_data_format(cb_q_in, cb_q_in); // DEBUG
                     // pack_reconfig_data_format(cb_out_accumulate_im_2);
                     copy_block(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);
                     copy_block(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
-
+                    // DPRINT << "2.1 num_core: " <<i<<ENDL();
                     // l = torch.exp(m_2 - m) * l_2 + torch.exp(m_1 - m) * l_1
                     /// l1 = torch.exp(m_2 - m) * l_2
                     // reconfig_data_format(cb_prev_max_2, cb_cur_max); // DEBUG
@@ -205,7 +209,7 @@ void MAIN {
                     // reconfig_data_format(cb_cur_sum, cb_prev_sum); // DEBUG
                     // pack_reconfig_data_format(cb_cur_sum);
                     add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
-
+                    // DPRINT << "2.2" <<ENDL();
                     // reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff); // DEBUG
                     // pack_reconfig_data_format(cb_out_accumulate_im);
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
@@ -222,7 +226,9 @@ void MAIN {
                     cb_pop_front(cb_m_in, Sq_chunk_t);
                     copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    // DPRINT << "2.3" <<ENDL();
                 }
+                // DPRINT << "check point3 end k_chunk: " << ENDL();
             }
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             cb_push_back(cb_cur_sum, Sq_chunk_t);
@@ -241,6 +247,7 @@ void MAIN {
             // free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
             cb_pop_front(cb_prev_sum, Sq_chunk_t);
+            //DPRINT << "check point4 end reduce: " << ENDL();
         }
     }
     cb_pop_front(cb_q_in, q_chunk_tiles);

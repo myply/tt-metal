@@ -31,6 +31,19 @@ CPMAddPackage(
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
+# CPMAddPackage(
+#     NAME Boost
+#     VERSION 1.86.0
+#     URL "/workspace/code/tenstorrent/tt-metal/build_Release/_deps/boost-subbuild/boost-populate-prefix/src/boost-1.86.0-cmake.tar.xz"
+#     OPTIONS
+#         "BOOST_ENABLE_CMAKE ON"
+#         "BOOST_SKIP_INSTALL_RULES ON"
+#         "BUILD_SHARED_LIBS OFF"
+#         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
+#     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
+# )
+
+
 ensureboosttarget(core)
 ensureboosttarget(container)
 ensureboosttarget(smart_ptr)

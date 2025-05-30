@@ -175,8 +175,12 @@ void ScaledDotProductAttentionDecode::validate(
         TT_FATAL(v_shape[-1] == D, "Error");
 
         // Check valid seqlen
+        // for (int i = 0; i < this->cur_pos.size(); i++) {
+        //     TT_FATAL(this->cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+        // }
+        // MODIFIED(QXF)
         for (int i = 0; i < this->cur_pos.size(); i++) {
-            TT_FATAL(this->cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+            TT_FATAL(this->cur_pos[i] <= k_shape[-2], "cur_pos must be <= K sequence dim");
         }
     }
 

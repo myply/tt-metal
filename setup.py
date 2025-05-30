@@ -127,10 +127,16 @@ class CMakeBuild(build_ext):
             ).exists(), "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
             env var. Please place files into `build/lib` and `runtime` folders."
         else:
-            build_dir = source_dir / "build_Release"
+            # MODIFIED(QXF)
+            # build_dir = source_dir / "build_Release"
+            build_dir = source_dir / "build_Release_tracy"
+            
             # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does the following things:
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
-            build_script_args = ["--build-static-libs", "--release"]
+            
+            # MODIFIED(QXF)
+            #build_script_args = ["--build-static-libs", "--release"]
+            build_script_args = ["--build-static-libs", "--release","-p"]
 
             subprocess.check_call(["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env)
 

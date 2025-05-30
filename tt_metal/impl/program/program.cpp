@@ -887,6 +887,7 @@ void detail::Program_::validate_circular_buffer_region(const IDevice* device) {
             continue;
         }
         uint64_t cb_region_end = cb_allocator.l1_regions.back().second; //cb_allocator.get_cb_region_end();
+        std::cout<<"cb_region_end(B): "<<cb_region_end<<std::endl;
         if (cb_region_end > max_l1_size) {
             TT_THROW(
                 "Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} "

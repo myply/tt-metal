@@ -15,6 +15,9 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sharding/shard_data_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding/vecadd_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core/vecadd_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_qxf/test_qxf.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/qxf_test_reconfig/qxf_test_reconfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/qxf_test_mix_precision/qxf_test_mix_precision.cpp
 )
 
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
