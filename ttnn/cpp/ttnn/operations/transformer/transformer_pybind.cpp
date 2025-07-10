@@ -15,6 +15,7 @@
 #include "sdpa_decodet/sdpa_decodet_pybind.hpp"
 #include "mla_decode0/mla_decode0_pybind.hpp"
 #include "mla_decode1/mla_decode1_pybind.hpp"
+#include "mla_decode2/mla_decode2_pybind.hpp"
 #include "split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
 
 namespace ttnn::operations::transformer {
@@ -46,6 +47,7 @@ void py_module(py::module& module) {
     py_bind_sdpa_decodet(module);
     py_bind_mla_decode0(module);
     py_bind_mla_decode1(module);
+    py_bind_mla_decode2(module);
 }
 
 }  // namespace ttnn::operations::transformer

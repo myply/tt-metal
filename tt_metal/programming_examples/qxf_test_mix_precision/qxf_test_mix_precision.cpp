@@ -11,14 +11,21 @@ using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     /* Silicon accelerator setup */
-    IDevice* device = CreateDevice(0);
-
+    //IDevice* device = CreateDevice(0);
+    // device = ttnn.open_device(device_id=device_id, dispatch_core_config=ttnn.device.DispatchCoreConfig(ttnn.device.DispatchCoreType.ETH))
+    // py::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
+    IDevice device = ttnn.open_device(device_id=0, dispatch_core_config=tt::tt_metal::DispatchCoreConfig{DispatchCoreType::ETH})
     uint32_t N=256;
 
     /* Setup program to execute along with its buffers and kernels to use */
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
-    constexpr CoreCoord core = {0, 0};
+    //constexpr CoreCoord core = {0, 0};
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    auto core = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     constexpr uint32_t single_tile_size = 2 * 1024;
 
 
